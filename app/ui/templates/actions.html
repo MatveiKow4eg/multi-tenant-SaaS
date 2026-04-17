@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="split-2">
+    <article class="card">
+        <h3>Запуск finder</h3>
+        <form method="post" action="/ui/actions/finder-run" class="stack-form">
+            <label>Страны (через запятую)
+                <input type="text" name="countries" value="Lithuania" required />
+            </label>
+            <label>Ключевые слова (через запятую)
+                <input type="text" name="keywords" placeholder="manufacturing, cnc, welding" />
+            </label>
+            <label>Результатов на запрос
+                <input type="number" name="results_per_query" value="10" min="1" max="50" />
+            </label>
+            <button type="submit">Запустить finder</button>
+        </form>
+    </article>
+
+    <article class="card">
+        <h3>Planner + finder</h3>
+        <form method="post" action="/ui/actions/plan-and-run" class="stack-form">
+            <label>Интент
+                <textarea name="intent" rows="4" required>Find Lithuanian metal fabrication and CNC subcontractors for recruitment partnerships.</textarea>
+            </label>
+            <label>Страна <input type="text" name="country" value="Lithuania" /></label>
+            <label>Результатов на запрос <input type="number" name="results_per_query" value="20" min="1" max="50" /></label>
+            <button type="submit">Спланировать и запустить</button>
+        </form>
+        <hr />
+        <form method="post" action="/ui/actions/planner-preview" class="stack-form">
+            <label>Интент (только preview)
+                <textarea name="intent" rows="3" required>Find Lithuanian industrial manufacturers and welding suppliers.</textarea>
+            </label>
+            <label>Страна <input type="text" name="country" value="Lithuania" /></label>
+            <button type="submit">Показать preview planner</button>
+        </form>
+    </article>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Действие по компании</h3>
+        <form method="post" action="/ui/actions/research-qualify" class="stack-form">
+            <label>ID компании
+                <input type="number" name="company_id" required />
+            </label>
+            <button type="submit">Перезапустить research+qualify</button>
+        </form>
+        <p class="muted small">Последние компании:</p>
+        <ul class="plain-list compact">
+            {% for c in recent_companies %}
+            <li>#{{ c.id }} - <a href="/ui/companies/{{ c.id }}">{{ c.domain }}</a></li>
+            {% else %}<li class="muted">Компаний нет.</li>{% endfor %}
+        </ul>
+    </article>
+
+    <article class="card">
+        <h3>Почта / ответы / health</h3>
+        <div class="row-actions">
+            <form method="post" action="/ui/actions/ingest-replies"><button type="submit">Ingest ответов</button></form>
+            <form method="post" action="/ui/actions/process-due"><button type="submit">Обработать due schedules</button></form>
+            <form method="post" action="/ui/actions/health-check"><button type="submit">Проверить health</button></form>
+        </div>
+        <p class="muted small">Последние кампании:</p>
+        <ul class="plain-list compact">
+            {% for c in recent_campaigns %}
+            <li>#{{ c.id }} - <a href="/ui/campaigns/{{ c.id }}">company_id={{ c.company_id }}</a> ({{ c.status }})</li>
+            {% else %}<li class="muted">Кампаний нет.</li>{% endfor %}
+        </ul>
+    </article>
+</section>
+{% endblock %}

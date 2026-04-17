@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Фильтры</h3>
+    <form method="get" class="filters-grid">
+        <label>Статус
+            <select name="status">
+                <option value="">Любой</option>
+                {% for s in statuses %}<option value="{{ s }}" {% if filters.status==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Язык
+            <select name="language">
+                <option value="">Любой</option>
+                {% for l in languages %}<option value="{{ l }}" {% if filters.language==l %}selected{% endif %}>{{ l }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Есть ответ
+            <select name="has_reply">
+                <option value="">Любой</option>
+                <option value="true" {% if filters.has_reply=='true' %}selected{% endif %}>Да</option>
+                <option value="false" {% if filters.has_reply=='false' %}selected{% endif %}>Нет</option>
+            </select>
+        </label>
+        <div class="filters-actions"><button type="submit">Применить</button><a class="btn-link" href="/ui/campaigns">Сбросить</a></div>
+    </form>
+</section>
+
+<section class="card">
+    <h3>Кампании</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Компания</th><th>Контакт</th><th>Язык</th><th>Статус</th><th>Шаг</th><th>Есть ответ</th><th>Создана</th><th>Обновлена</th><th>Действия</th></tr></thead>
+        <tbody>
+            {% for campaign, company, contact in rows %}
+            <tr>
+                <td>{{ campaign.id }}</td>
+                <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
+                <td>{{ contact.email if contact else '-' }}</td>
+                <td>{{ campaign.language or '-' }}</td>
+                <td>{{ campaign.status }}</td>
+                <td>{{ campaign.step }}</td>
+                <td>{{ campaign.has_reply }}</td>
+                <td>{{ campaign.created_at }}</td>
+                <td>{{ campaign.updated_at }}</td>
+                <td>
+                    <div class="row-actions">
+                        <a href="/ui/campaigns/{{ campaign.id }}">Детали</a>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Отправить сейчас</button></form>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Остановить</button></form>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied"><button type="submit">Отметить как replied</button></form>
+                    </div>
+                </td>
+            </tr>
+            {% else %}<tr><td colspan="10" class="muted">Кампаний нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

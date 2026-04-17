@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:480px;margin:auto;">
+    <h3>Вход</h3>
+    <form method="post" action="/ui/login" class="stack-form">
+        <label>Email
+            <input type="email" name="email" required autofocus />
+        </label>
+        <label>Пароль
+            <input type="password" name="password" required />
+        </label>
+        <label>Workspace slug <span style="color:var(--muted)">(оставьте пустым, если один)</span>
+            <input type="text" name="tenant_slug" placeholder="my-company" />
+        </label>
+        <button type="submit">Войти</button>
+    </form>
+    <p style="margin-top:1rem;">
+        <a href="/ui/forgot-password">Забыли пароль?</a>
+        &nbsp;·&nbsp;
+        <a href="/ui/register">Создать аккаунт</a>
+    </p>
+    <hr style="margin:1rem 0; opacity:0.35;" />
+    <form method="post" action="/ui/resend-verification" class="stack-form">
+        <label>Не пришло письмо подтверждения?
+            <input type="email" name="email" placeholder="you@example.com" required />
+        </label>
+        <button type="submit">Отправить повторно</button>
+    </form>
+</section>
+{% endblock %}

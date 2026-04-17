@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="split-2">
+    <article class="card">
+        <h3>Добавить участника</h3>
+        <form method="post" action="/ui/team/add" class="stack-form">
+            <label>Email
+                <input type="email" name="email" required />
+            </label>
+            <label>Полное имя
+                <input type="text" name="full_name" />
+            </label>
+            <label>Роль
+                <select name="role">
+                    {% for role in roles %}
+                    <option value="{{ role }}">{{ role }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Пароль (обязательно только для нового пользователя)
+                <input type="password" name="password" minlength="8" />
+            </label>
+            <button type="submit">Добавить</button>
+        </form>
+    </article>
+    <article class="card">
+        <h3>Приглашение по email</h3>
+        <form method="post" action="/ui/team/invite" class="stack-form">
+            <label>Email
+                <input type="email" name="email" required />
+            </label>
+            <label>Роль
+                <select name="role">
+                    {% for role in roles %}
+                    <option value="{{ role }}">{{ role }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Срок (часы)
+                <input type="number" name="expires_in_hours" min="1" max="336" value="72" />
+            </label>
+            <button type="submit">Создать invite</button>
+        </form>
+        <p class="muted small">Система вернет токен приглашения для отправки пользователю.</p>
+    </article>
+</section>
+
+{% if latest_invite_token %}
+<section class="card">
+    <h3>Последний invite token</h3>
+    <p class="muted">Передайте этот токен пользователю для `POST /api/auth/accept-invite`:</p>
+    <pre>{{ latest_invite_token }}</pre>
+</section>
+{% endif %}
+
+<section class="split-2">
+    <article class="card">
+        <h3>Права</h3>
+        <p class="muted">Текущая роль: <strong>{{ actor_role }}</strong></p>
+        <p class="muted">`owner` может назначать `owner`. `admin` не может повышать до `owner` и менять владельца.</p>
+    </article>
+</section>
+
+<section class="card">
+    <h3>Участники tenant</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Email</th><th>Имя</th><th>Роль</th><th>Статус</th><th>Действие</th></tr></thead>
+        <tbody>
+            {% for membership, user in rows %}
+            <tr>
+                <td>{{ membership.id }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ user.full_name or '-' }}</td>
+                <td>{{ membership.role.value if membership.role and membership.role.value else membership.role }}</td>
+                <td>{{ membership.status }}</td>
+                <td>
+                    <form method="post" action="/ui/team/{{ membership.id }}/update" class="inline-form">
+                        <select name="role">
+                            {% for role in roles %}
+                            <option value="{{ role }}" {% if (membership.role.value if membership.role and membership.role.value else membership.role) == role %}selected{% endif %}>{{ role }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="status">
+                            {% for status in statuses %}
+                            <option value="{{ status }}" {% if membership.status == status %}selected{% endif %}>{{ status }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit">Обновить</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="muted">Участников пока нет.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

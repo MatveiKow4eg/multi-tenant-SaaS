@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Компания</h3>
+    <div class="details-grid">
+        <div><strong>ID:</strong> {{ company.id }}</div>
+        <div><strong>Домен:</strong> {{ company.domain }}</div>
+        <div><strong>Название:</strong> {{ company.name or '-' }}</div>
+        <div><strong>Страна:</strong> {{ company.country or '-' }}</div>
+        <div><strong>Индустрия:</strong> {{ company.industry or '-' }}</div>
+        <div><strong>Статус:</strong> {{ company.status }}</div>
+        <div><strong>Score:</strong> {{ company.score if company.score is not none else '-' }}</div>
+        <div><strong>Домен в blacklist:</strong> {% if domain_blacklist %}да{% else %}нет{% endif %}</div>
+    </div>
+
+    <div class="top-gap">
+        <h4>Статус подготовки</h4>
+        <div class="prep-status-grid">
+            <div class="prep-step {% if pipeline_status.research == 'done' %}done{% else %}pending{% endif %}">
+                <span>Исследование</span>
+                <strong>{{ pipeline_status.research }}</strong>
+            </div>
+            <div class="prep-step {% if pipeline_status.contacts == 'done' %}done{% else %}pending{% endif %}">
+                <span>Контакты</span>
+                <strong>{{ pipeline_status.contacts }}</strong>
+            </div>
+            <div class="prep-step {% if pipeline_status.qualification == 'done' %}done{% else %}pending{% endif %}">
+                <span>Qualification</span>
+                <strong>{{ pipeline_status.qualification }}</strong>
+            </div>
+            <div class="prep-step {% if pipeline_status.outreach == 'done' %}done{% else %}pending{% endif %}">
+                <span>Outreach draft</span>
+                <strong>{{ pipeline_status.outreach }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="row-actions top-gap">
+        <form method="post" action="/ui/companies/{{ company.id }}/prepare">
+            <button type="submit">Подготовить компанию</button>
+        </form>
+        <details class="row-menu">
+            <summary>Доп. действия</summary>
+            <div class="row-menu-list">
+                <form method="post" action="/ui/companies/{{ company.id }}/research-qualify"><button type="submit">Перезапустить research+qualify</button></form>
+                <form method="post" action="/ui/companies/{{ company.id }}/refresh-contacts"><button type="submit">Обновить контакты</button></form>
+                <form method="post" action="/ui/companies/{{ company.id }}/outreach/generate"><button type="submit">Сгенерировать outreach (с кампанией)</button></form>
+            </div>
+        </details>
+    </div>
+    <form method="post" action="/ui/companies/{{ company.id }}/blacklist-domain" class="inline-form top-gap">
+        <input type="text" name="reason" placeholder="Причина" />
+        <button type="submit">Добавить домен в blacklist</button>
+    </form>
+
+    {% if outreach_draft %}
+    <div class="top-gap">
+        <h4>Outreach draft (без кампании)</h4>
+        <p class="muted small">{{ outreach_draft.created_at }}</p>
+        <pre>{{ outreach_draft.details }}</pre>
+    </div>
+    {% endif %}
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Результат qualification</h3>
+        {% if qualification %}
+        <div><strong>Причина:</strong> {{ qualification.get('reason', '-') }}</div>
+        <div><strong>Score:</strong> {{ qualification.get('score', '-') }}</div>
+        <div><strong>Сигналы:</strong></div>
+        <ul>
+            {% for signal in signals %}<li>{{ signal }}</li>{% else %}<li class="muted">Сигналов нет.</li>{% endfor %}
+        </ul>
+        <pre>{{ qualification }}</pre>
+        {% else %}
+        <p class="muted">Результата qualification пока нет.</p>
+        {% endif %}
+    </article>
+
+    <article class="card">
+        <h3>Причины пропуска / статусные заметки</h3>
+        <ul class="plain-list">
+            {% for row in skip_logs %}
+            <li>
+                <strong>{{ row.action }}</strong> ({{ row.created_at }})<br />
+                <span class="muted">{{ row.reason or '-' }}</span><br />
+                <pre>{{ json_excerpt(row.details) }}</pre>
+            </li>
+            {% else %}
+            <li class="muted">Причины пропуска не зафиксированы.</li>
+            {% endfor %}
+        </ul>
+    </article>
+</section>
+
+<section class="card">
+    <h3>Найденные страницы</h3>
+    <table>
+        <thead><tr><th>ID</th><th>URL</th><th>Тип</th><th>Собрано</th></tr></thead>
+        <tbody>
+            {% for page in pages %}
+            <tr><td>{{ page.id }}</td><td><a href="{{ page.url }}" target="_blank">{{ page.url }}</a></td><td>{{ page.page_type or '-' }}</td><td>{{ page.collected_at }}</td></tr>
+            {% else %}<tr><td colspan="4" class="muted">Страниц нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Контакты</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Email</th><th>Роль</th><th>Confidence</th><th>Источник</th><th>Blacklist</th><th>Действие</th></tr></thead>
+        <tbody>
+            {% for c in contacts %}
+            <tr>
+                <td>{{ c.id }}</td>
+                <td>{{ c.email }}</td>
+                <td>{{ c.role or '-' }}</td>
+                <td>{{ c.confidence if c.confidence is not none else '-' }}</td>
+                <td>{% if c.source_url %}<a href="{{ c.source_url }}" target="_blank">источник</a>{% else %}-{% endif %}</td>
+                <td>{% if c.email in blacklisted_contacts | map(attribute='value') | list %}да{% else %}нет{% endif %}</td>
+                <td>
+                    <form method="post" action="/ui/companies/{{ company.id }}/blacklist-contact" class="inline-form">
+                        <input type="hidden" name="email" value="{{ c.email }}" />
+                        <input type="text" name="reason" placeholder="Причина" />
+                        <button type="submit">Добавить контакт в blacklist</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="muted">Контактов нет.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>Кампании и сообщения</h3>
+    {% for campaign in campaigns %}
+    <div class="campaign-block">
+        <h4>
+            Кампания #{{ campaign.id }}
+            <span class="muted">status={{ campaign.status }}, step={{ campaign.step }}, has_reply={{ campaign.has_reply }}</span>
+            <a href="/ui/campaigns/{{ campaign.id }}">открыть</a>
+            {% if campaign.status == 'active' and not campaign.has_reply %}
+            <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now" class="inline-form">
+                <button type="submit">Отправить сообщение</button>
+            </form>
+            {% endif %}
+        </h4>
+        <table>
+            <thead><tr><th>Направление</th><th>Тема</th><th>Отправлено</th><th>Получено</th><th>Превью</th></tr></thead>
+            <tbody>
+            {% for msg in messages_by_campaign.get(campaign.id, []) %}
+                <tr>
+                    <td>{{ msg.direction }}</td>
+                    <td>{{ msg.subject or '-' }}</td>
+                    <td>{{ msg.sent_at or '-' }}</td>
+                    <td>{{ msg.received_at or '-' }}</td>
+                    <td>{{ (msg.body or '')[:140] }}{% if msg.body and msg.body|length > 140 %}...{% endif %}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="5" class="muted">Сообщений нет.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="muted">Кампаний пока нет.</p>
+    {% endfor %}
+</section>
+{% endblock %}

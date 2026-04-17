@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Передачи (warm leads)</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Label</th><th>Приоритет</th><th>Нужен человек</th><th>Компания</th><th>Контакт</th><th>Кампания</th><th>Рекомендованное следующее действие</th><th>Причина/Summary</th><th>Статус</th><th>Создано</th></tr></thead>
+        <tbody>
+            {% for handoff, campaign, company, contact in rows %}
+            <tr>
+                <td>{{ handoff.id }}</td>
+                <td>{{ handoff.label }}</td>
+                <td>{{ handoff.priority }}</td>
+                <td>{{ handoff.needs_human }}</td>
+                <td>{% if company %}<a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a>{% else %}-{% endif %}</td>
+                <td>{{ contact.email if contact else '-' }}</td>
+                <td>{% if campaign %}<a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a>{% else %}-{% endif %}</td>
+                <td>{{ handoff.recommended_reply or '-' }}</td>
+                <td>{{ handoff.summary or '-' }}</td>
+                <td>
+                    <form method="post" action="/ui/handoffs/{{ handoff.id }}/status" class="inline-form">
+                        <select name="status">
+                            <option value="new" {% if handoff.status=='new' %}selected{% endif %}>new</option>
+                            <option value="in_review" {% if handoff.status=='in_review' %}selected{% endif %}>in_review</option>
+                            <option value="done" {% if handoff.status=='done' %}selected{% endif %}>done</option>
+                        </select>
+                        <button type="submit">Сохранить</button>
+                    </form>
+                </td>
+                <td>{{ handoff.created_at }}</td>
+            </tr>
+            {% else %}<tr><td colspan="11" class="muted">Передач нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

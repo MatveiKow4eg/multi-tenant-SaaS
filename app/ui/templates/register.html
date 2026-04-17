@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:480px;margin:auto;">
+    <h3>Регистрация</h3>
+    <form method="post" action="/ui/register" class="stack-form">
+        <label>Полное имя
+            <input type="text" name="full_name" />
+        </label>
+        <label>Email
+            <input type="email" name="email" required />
+        </label>
+        <label>Пароль <span style="color:var(--muted)">(минимум 8 символов)</span>
+            <input type="password" name="password" minlength="8" required />
+        </label>
+        <label>Название workspace
+            <input type="text" name="tenant_name" required minlength="2" maxlength="255" />
+        </label>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+    <p style="margin-top:1rem;">
+        Уже есть аккаунт? <a href="/ui/login">Войти</a>
+    </p>
+    <hr style="margin:1rem 0; opacity:0.35;" />
+    <form method="post" action="/ui/resend-verification" class="stack-form">
+        <label>Уже зарегистрированы, но не получили письмо подтверждения?
+            <input type="email" name="email" placeholder="you@example.com" required />
+        </label>
+        <button type="submit">Отправить подтверждение повторно</button>
+    </form>
+</section>
+{% endblock %}

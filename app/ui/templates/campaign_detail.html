@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Сводка кампании</h3>
+    <div class="details-grid">
+        <div><strong>ID:</strong> {{ campaign.id }}</div>
+        <div><strong>Компания:</strong> <a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></div>
+        <div><strong>Контакт:</strong> {{ contact.email if contact else '-' }}</div>
+        <div><strong>Язык:</strong> {{ campaign.language or '-' }}</div>
+        <div><strong>Статус:</strong> {{ campaign.status }}</div>
+        <div><strong>Шаг:</strong> {{ campaign.step }}</div>
+        <div><strong>Есть ответ:</strong> {{ campaign.has_reply }}</div>
+    </div>
+    <div class="top-gap"><strong>Brief:</strong><pre>{{ campaign.brief or '-' }}</pre></div>
+    <div class="row-actions top-gap">
+        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Отправить сейчас</button></form>
+        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Остановить кампанию</button></form>
+        <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied"><button type="submit">Отметить как replied</button></form>
+    </div>
+</section>
+
+<section class="card">
+    <h3>Хронология сообщений</h3>
+    <table>
+        <thead><tr><th>Направление</th><th>Тема</th><th>Превью тела</th><th>Шаг</th><th>Отправлено</th><th>Получено</th></tr></thead>
+        <tbody>
+            {% for m in messages %}
+            <tr>
+                <td>{{ m.direction }}</td>
+                <td>{{ m.subject or '-' }}</td>
+                <td><pre>{{ m.body or '-' }}</pre></td>
+                <td>{{ m.step if m.step is not none else '-' }}</td>
+                <td>{{ m.sent_at or '-' }}</td>
+                <td>{{ m.received_at or '-' }}</td>
+            </tr>
+            {% else %}<tr><td colspan="6" class="muted">Сообщений нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Расписания</h3>
+        <table>
+            <thead><tr><th>ID</th><th>Задача</th><th>Шаг</th><th>Выполнить в</th><th>Исполнено</th></tr></thead>
+            <tbody>
+                {% for s in schedules %}
+                <tr><td>{{ s.id }}</td><td>{{ s.task_name }}</td><td>{{ s.step }}</td><td>{{ s.run_at }}</td><td>{{ s.executed }}</td></tr>
+                {% else %}<tr><td colspan="5" class="muted">Расписаний нет.</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </article>
+    <article class="card">
+        <h3>Передачи</h3>
+        <table>
+            <thead><tr><th>ID</th><th>Label</th><th>Приоритет</th><th>Статус</th><th>Summary</th><th>Создана</th></tr></thead>
+            <tbody>
+                {% for h in handoffs %}
+                <tr><td>{{ h.id }}</td><td>{{ h.label }}</td><td>{{ h.priority }}</td><td>{{ h.status }}</td><td>{{ h.summary or '-' }}</td><td>{{ h.created_at }}</td></tr>
+                {% else %}<tr><td colspan="6" class="muted">Передач нет.</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </article>
+</section>
+{% endblock %}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ page_title }} | bot_lertisento</title>
+    <link rel="stylesheet" href="{{ url_for('ui_static', path='style.css') }}" />
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <a href="/ui">bot_lertisento</a>
+            <span class="sub">локальная операционная панель</span>
+        </div>
+        <nav class="main-nav">
+            <a class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}" href="/ui">Панель</a>
+            <a class="nav-link {% if active_nav == 'companies' %}active{% endif %}" href="/ui/companies">Компании</a>
+            <a class="nav-link {% if active_nav == 'campaigns' %}active{% endif %}" href="/ui/campaigns">Кампании</a>
+            <a class="nav-link {% if active_nav == 'messages' %}active{% endif %}" href="/ui/messages">Сообщения</a>
+            <a class="nav-link {% if active_nav == 'replies' %}active{% endif %}" href="/ui/replies">Ответы</a>
+            <a class="nav-link {% if active_nav == 'operations' %}active{% endif %}" href="/ui/operations">Операции</a>
+            <details class="nav-more {% if active_nav in ['contacts', 'handoffs', 'actions', 'team'] %}active{% endif %}">
+                <summary>Еще</summary>
+                <div class="nav-more-menu">
+                    <a class="nav-link {% if active_nav == 'contacts' %}active{% endif %}" href="/ui/contacts">Контакты</a>
+                    <a class="nav-link {% if active_nav == 'handoffs' %}active{% endif %}" href="/ui/handoffs">Передачи</a>
+                    <a class="nav-link {% if active_nav == 'actions' %}active{% endif %}" href="/ui/actions">Действия</a>
+                    <a class="nav-link {% if active_nav == 'team' %}active{% endif %}" href="/ui/team">Команда</a>
+                </div>
+            </details>
+            <form method="post" action="/ui/logout" class="inline-form">
+                <button type="submit" class="btn-link">Выйти</button>
+            </form>
+        </nav>
+    </header>
+
+    <main class="container">
+        <div class="page-head">
+            <h1>{{ page_title }}</h1>
+            <p class="muted">Серверный рендеринг на FastAPI + Jinja2.</p>
+        </div>
+
+        {% if flash_message %}
+            <div class="flash flash-ok">{{ flash_message }}</div>
+        {% endif %}
+        {% if flash_error %}
+            <div class="flash flash-err">{{ flash_error }}</div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+    <script>
+    (function () {
+        function getCookie(name) {
+            const needle = name + "=";
+            const items = document.cookie ? document.cookie.split("; ") : [];
+            for (const item of items) {
+                if (item.startsWith(needle)) {
+                    return decodeURIComponent(item.substring(needle.length));
+                }
+            }
+            return "";
+        }
+
+        const csrfToken = getCookie("{{ csrf_cookie_name }}");
+        if (!csrfToken) {
+            return;
+        }
+
+        const forms = document.querySelectorAll('form[method="post"], form[method="POST"]');
+        for (const form of forms) {
+            if (form.querySelector('input[name="_csrf_token"]')) {
+                continue;
+            }
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "_csrf_token";
+            input.value = csrfToken;
+            form.appendChild(input);
+        }
+    })();
+    </script>
+</body>
+</html>

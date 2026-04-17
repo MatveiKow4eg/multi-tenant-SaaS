@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="split-2">
+    <article class="card">
+        <h3>Ошибки / предупреждения</h3>
+        <table>
+            <thead><tr><th>Время</th><th>Действие</th><th>Сущность</th><th>Причина</th><th>Детали</th></tr></thead>
+            <tbody>
+                {% for row in errors %}
+                <tr>
+                    <td>{{ row.created_at }}</td>
+                    <td>{{ row.action }}</td>
+                    <td>{{ row.entity_type }} #{{ row.entity_id or '-' }}</td>
+                    <td>{{ row.reason or '-' }}</td>
+                    <td><pre>{{ json_excerpt(row.details) }}</pre></td>
+                </tr>
+                {% else %}<tr><td colspan="5" class="muted">В последних аудит-логах нет предупреждений.</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </article>
+    <article class="card">
+        <h3>Последние записи task</h3>
+        <table>
+            <thead><tr><th>ID</th><th>Статус</th><th>Payload</th><th>Создана</th><th>Обновлена</th></tr></thead>
+            <tbody>
+                {% for t in recent_tasks %}
+                <tr><td>{{ t.id }}</td><td>{{ t.status }}</td><td><pre>{{ json_excerpt(t.payload) }}</pre></td><td>{{ t.created_at }}</td><td>{{ t.updated_at }}</td></tr>
+                {% else %}<tr><td colspan="5" class="muted">Записей task нет.</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section class="card">
+    <h3>Потоки операций</h3>
+    {% for stream, rows in grouped.items() %}
+    <h4>{{ stream }}</h4>
+    <table>
+        <thead><tr><th>Время</th><th>Действие</th><th>Сущность</th><th>Причина</th><th>Детали</th></tr></thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.created_at }}</td>
+                <td>{{ row.action }}</td>
+                <td>{{ row.entity_type }} #{{ row.entity_id or '-' }}</td>
+                <td>{{ row.reason or '-' }}</td>
+                <td><pre>{{ json_excerpt(row.details) }}</pre></td>
+            </tr>
+            {% else %}<tr><td colspan="5" class="muted">Записей нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+    {% endfor %}
+</section>
+
+<section class="card">
+    <h3>Auth аудит</h3>
+    <form method="get" action="/ui/operations" class="filters-row" style="margin-bottom:1rem;">
+        <label>Событие
+            <select name="auth_action">
+                <option value="">Все</option>
+                {% for action in auth_actions %}
+                <option value="{{ action }}" {% if auth_action == action %}selected{% endif %}>{{ action }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">Применить</button>
+        <a href="/ui/operations" class="btn-ghost">Сбросить</a>
+    </form>
+    <table>
+        <thead><tr><th>Время</th><th>Действие</th><th>User</th><th>Причина</th><th>Детали</th></tr></thead>
+        <tbody>
+            {% for row in auth_rows %}
+            <tr>
+                <td>{{ row.created_at }}</td>
+                <td>{{ row.action }}</td>
+                <td>{{ row.entity_id or '-' }}</td>
+                <td>{{ row.reason or '-' }}</td>
+                <td><pre>{{ json_excerpt(row.details) }}</pre></td>
+            </tr>
+            {% else %}<tr><td colspan="5" class="muted">Auth-событий нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

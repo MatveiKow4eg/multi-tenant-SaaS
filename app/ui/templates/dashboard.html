@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block content %}
+{% set status_compact = status_compact | default({
+    'new': status_counts.get('new', 0),
+    'qualified': status_counts.get('qualified', 0),
+    'rejected': status_counts.get('rejected', 0)
+}) %}
+{% set system_health = system_health | default({
+    'api': {'ok': health.api_ok, 'label': 'online', 'detail': None},
+    'smtp': {'ok': health.smtp_ok, 'label': 'online' if health.smtp_ok else 'offline', 'detail': health.mail_error if not health.smtp_ok else None},
+    'imap': {'ok': health.imap_ok, 'label': 'online' if health.imap_ok else 'offline', 'detail': health.mail_error if not health.imap_ok else None}
+}) %}
+{% set attention_items = attention_items | default([]) %}
+{% set summaries = summaries | default([]) %}
+{% set recent_tasks = recent_tasks | default([]) %}
+<section class="dashboard-kpi-row">
+    <div class="kpi-grid main-kpi-grid">
+        <article class="card kpi-card {% if company_total == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">Всего компаний</p>
+            <div class="kpi">{{ company_total }}</div>
+            <p class="kpi-note">В базе на текущий момент</p>
+        </article>
+        <article class="card kpi-card {% if status_counts.get('outreaching', 0) == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">В outreach</p>
+            <div class="kpi">{{ status_counts.get('outreaching', 0) }}</div>
+            <p class="kpi-note">Компании в активном цикле</p>
+        </article>
+        <article class="card kpi-card {% if active_campaigns == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">Активные кампании</p>
+            <div class="kpi">{{ active_campaigns }}</div>
+            <p class="kpi-note">Кампании со статусом активна</p>
+        </article>
+        <article class="card kpi-card {% if sent_messages == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">Отправлено писем</p>
+            <div class="kpi">{{ sent_messages }}</div>
+            <p class="kpi-note">Исходящие с sent_at</p>
+        </article>
+        <article class="card kpi-card {% if replies_count == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">Ответы</p>
+            <div class="kpi">{{ replies_count }}</div>
+            <p class="kpi-note">Входящие сообщения</p>
+        </article>
+        <article class="card kpi-card {% if warm_handoffs == 0 %}kpi-zero{% endif %}">
+            <p class="kpi-title">Теплые передачи</p>
+            <div class="kpi">{{ warm_handoffs }}</div>
+            <p class="kpi-note">Нужны действия человека</p>
+        </article>
+    </div>
+
+    <aside class="card compact-status-card">
+        <h3>Статусы компаний</h3>
+        <div class="compact-status-grid">
+            <div class="compact-status-item {% if status_compact.new == 0 %}kpi-zero{% endif %}">
+                <span class="label">Новые</span>
+                <strong>{{ status_compact.new }}</strong>
+            </div>
+            <div class="compact-status-item {% if status_compact.qualified == 0 %}kpi-zero{% endif %}">
+                <span class="label">Квалифицированные</span>
+                <strong>{{ status_compact.qualified }}</strong>
+            </div>
+            <div class="compact-status-item {% if status_compact.rejected == 0 %}kpi-zero{% endif %}">
+                <span class="label">Отклоненные</span>
+                <strong>{{ status_compact.rejected }}</strong>
+            </div>
+        </div>
+    </aside>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Требует внимания</h3>
+        <ul class="attention-list">
+            {% for item in attention_items %}
+            <li class="attention-item level-{{ item.level }}">
+                <span class="attention-title">{{ item.title }}</span>
+                <strong>{{ item.value }}</strong>
+            </li>
+            {% else %}
+            <li class="attention-item level-success">
+                <span class="attention-title">Критичных задач нет</span>
+                <strong>OK</strong>
+            </li>
+            {% endfor %}
+        </ul>
+    </article>
+
+    <article class="card">
+        <h3>Состояние системы</h3>
+        <div class="service-grid">
+            {% for service, status in system_health.items() %}
+            <div class="service-pill {% if status.ok %}ok{% else %}down{% endif %}">
+                <div class="service-head">
+                    <span>{{ service|upper }}</span>
+                    <span class="dot"></span>
+                </div>
+                <p>{{ status.label }}</p>
+                {% if status.detail %}
+                <p class="muted small">{{ status.detail }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+
+<section class="card">
+    <h3>Последняя активность</h3>
+    <table class="activity-table">
+        <thead>
+            <tr>
+                <th>Время</th>
+                <th>Тип</th>
+                <th>Сущность</th>
+                <th>Действие</th>
+                <th>Причина</th>
+                <th>Детали</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in recent_activity %}
+            <tr>
+                <td>{{ item.row.created_at }}</td>
+                    <td>
+                        <span class="event-badge {{ item.level }}">
+                            {% if item.level == 'success' %}успех{% elif item.level == 'warning' %}внимание{% elif item.level == 'error' %}ошибка{% else %}инфо{% endif %}
+                        </span>
+                    </td>
+                <td>{{ item.row.entity_type }} #{{ item.row.entity_id or '-' }}</td>
+                <td>{{ item.row.action }}</td>
+                <td>{{ item.row.reason or '-' }}</td>
+                <td>
+                    {% if item.row.details %}
+                    <details class="activity-details">
+                        <summary>Открыть</summary>
+                        <pre>{{ item.details_full }}</pre>
+                    </details>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="muted">Пока нет активности.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Последние сводки</h3>
+        {% if summaries %}
+        <div class="summary-list">
+            {% for item in summaries %}
+            <div class="summary-row">
+                <div>
+                    <strong>{{ item.title }}</strong>
+                    <p class="muted small">{{ item.row.created_at }}</p>
+                </div>
+                <p class="summary-text">{{ json_excerpt(item.row.details, 240) }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted compact-empty">Сводок пока нет.</p>
+        {% endif %}
+    </article>
+
+    <article class="card">
+        <h3>Фоновые процессы</h3>
+        {% if recent_tasks %}
+        <table class="compact-table">
+            <thead>
+                <tr><th>ID</th><th>Статус</th><th>Создана</th><th>Payload</th></tr>
+            </thead>
+            <tbody>
+                {% for t in recent_tasks %}
+                <tr>
+                    <td>{{ t.id }}</td>
+                    <td>{{ t.status }}</td>
+                    <td>{{ t.created_at }}</td>
+                    <td>{{ json_excerpt(t.payload, 120) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="muted compact-empty">Фоновых процессов пока нет.</p>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

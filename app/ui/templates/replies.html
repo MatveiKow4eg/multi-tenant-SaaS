@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Ответы</h3>
+    <table>
+        <thead><tr><th>Классификация</th><th>Summary</th><th>Нужен человек</th><th>Компания</th><th>Контакт</th><th>Кампания</th><th>Получено</th><th>Превью сырого тела</th></tr></thead>
+        <tbody>
+            {% for reply, message, campaign, company, contact in rows %}
+            <tr>
+                <td>{{ reply.label or '-' }}</td>
+                <td>{{ reply.summary or '-' }}</td>
+                <td>{{ reply.needs_human }}</td>
+                <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
+                <td>{{ contact.email if contact else '-' }}</td>
+                <td><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a></td>
+                <td>{{ message.received_at or reply.created_at }}</td>
+                <td>{{ (message.body or '')[:180] }}{% if message.body and message.body|length > 180 %}...{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="8" class="muted">Ответов пока нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

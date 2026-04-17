@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Фильтры</h3>
+    <form method="get" class="filters-grid">
+        <label>Роль
+            <select name="role">
+                <option value="">Любая</option>
+                {% for r in roles %}<option value="{{ r }}" {% if filters.role==r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Минимальный confidence <input type="number" step="0.01" name="confidence_min" value="{{ filters.confidence_min }}" /></label>
+        <label>Максимальный confidence <input type="number" step="0.01" name="confidence_max" value="{{ filters.confidence_max }}" /></label>
+        <label>Компания/домен/email <input type="text" name="q" value="{{ filters.q }}" /></label>
+        <label>Страна
+            <select name="country">
+                <option value="">Любая</option>
+                {% for c in countries %}<option value="{{ c }}" {% if filters.country==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+        </label>
+        <div class="filters-actions">
+            <button type="submit">Применить</button>
+            <a class="btn-link" href="/ui/contacts">Сбросить</a>
+        </div>
+    </form>
+</section>
+
+<section class="card">
+    <h3>Контакты</h3>
+    <table>
+        <thead><tr><th>Компания</th><th>Email</th><th>Роль</th><th>Источник URL</th><th>Confidence</th><th>Создан</th></tr></thead>
+        <tbody>
+            {% for contact, company in rows %}
+            <tr>
+                <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
+                <td>{{ contact.email }}</td>
+                <td>{{ contact.role or '-' }}</td>
+                <td>{% if contact.source_url %}<a href="{{ contact.source_url }}" target="_blank">{{ contact.source_url }}</a>{% else %}-{% endif %}</td>
+                <td>{{ contact.confidence if contact.confidence is not none else '-' }}</td>
+                <td>{{ contact.created_at }}</td>
+            </tr>
+            {% else %}<tr><td colspan="6" class="muted">Контакты не найдены.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

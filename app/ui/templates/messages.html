@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Фильтры</h3>
+    <form method="get" class="filters-grid">
+        <label>Направление
+            <select name="direction">
+                <option value="">Любое</option>
+                <option value="outbound" {% if filters.direction=='outbound' %}selected{% endif %}>Исходящее</option>
+                <option value="inbound" {% if filters.direction=='inbound' %}selected{% endif %}>Входящее</option>
+            </select>
+        </label>
+        <label>Статус отправки
+            <select name="sent_state">
+                <option value="">Любой</option>
+                <option value="sent" {% if filters.sent_state=='sent' %}selected{% endif %}>Отправлено/Получено</option>
+                <option value="not_sent" {% if filters.sent_state=='not_sent' %}selected{% endif %}>Не отправлено</option>
+            </select>
+        </label>
+        <label>Компания <input type="text" name="company" value="{{ filters.company }}" /></label>
+        <label>Страна
+            <select name="country">
+                <option value="">Любая</option>
+                {% for c in countries %}<option value="{{ c }}" {% if filters.country==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Дата с <input type="date" name="date_from" value="{{ filters.date_from }}" /></label>
+        <label>Дата по <input type="date" name="date_to" value="{{ filters.date_to }}" /></label>
+        <div class="filters-actions"><button type="submit">Применить</button><a class="btn-link" href="/ui/messages">Сбросить</a></div>
+    </form>
+</section>
+
+<section class="card">
+    <h3>Сообщения</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Кампания</th><th>Направление</th><th>Тема</th><th>Время</th><th>Превью</th><th>Компания</th><th>Контакт</th><th>Действие</th></tr></thead>
+        <tbody>
+            {% for msg, campaign, company, contact in rows %}
+            <tr>
+                <td>{{ msg.id }}</td>
+                <td><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a></td>
+                <td>{{ msg.direction }}</td>
+                <td>{{ msg.subject or '-' }}</td>
+                <td>{{ msg.sent_at or msg.received_at or '-' }}</td>
+                <td>{{ (msg.body or '')[:160] }}{% if msg.body and msg.body|length > 160 %}...{% endif %}</td>
+                <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
+                <td>{{ contact.email if contact else '-' }}</td>
+                <td>
+                    {% if msg.direction == 'outbound' and not msg.sent_at and campaign.status == 'active' and not campaign.has_reply %}
+                    <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now" class="inline-form">
+                        <button type="submit">Отправить сообщение</button>
+                    </form>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}<tr><td colspan="9" class="muted">Сообщений нет.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

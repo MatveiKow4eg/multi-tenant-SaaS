@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:680px;">
+    <h3>Принять приглашение</h3>
+    <form method="post" action="/ui/accept-invite" class="stack-form">
+        <label>Invite token
+            <input type="text" name="token" value="{{ token }}" required />
+        </label>
+        <label>Полное имя
+            <input type="text" name="full_name" />
+        </label>
+        <label>Пароль
+            <input type="password" name="password" minlength="8" required />
+        </label>
+        <button type="submit">Принять приглашение</button>
+    </form>
+</section>
+{% endblock %}

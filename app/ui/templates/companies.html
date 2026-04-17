@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% import "_ui_macros.html" as ui %}
+{% block content %}
+<section class="card">
+    <h3>Фильтры</h3>
+    <form method="get" class="filters-grid companies-filters">
+        <label class="filter-span-2">Поиск по домену/названию <input type="text" name="q" value="{{ filters.q }}" placeholder="Например: acme.lt или Acme" /></label>
+        <label>Страна
+            <select name="country">
+                <option value="">Любая</option>
+                {% for c in countries %}<option value="{{ c }}" {% if filters.country==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Статус
+            <select name="status">
+                <option value="">Любой</option>
+                {% for s in statuses %}<option value="{{ s }}" {% if filters.status==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>Индустрия <input type="text" name="industry" value="{{ filters.industry }}" /></label>
+        <label>Категория
+            <select name="industry_bucket">
+                <option value="">Все</option>
+                {% for opt in bucket_options %}
+                <option value="{{ opt.key }}" {% if filters.industry_bucket == opt.key %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Минимальный score <input type="number" step="0.01" name="score_min" value="{{ filters.score_min }}" /></label>
+        <label>Максимальный score <input type="number" step="0.01" name="score_max" value="{{ filters.score_max }}" /></label>
+        <label>Есть контакты
+            <select name="has_contacts">
+                <option value="">Любой</option>
+                <option value="true" {% if filters.has_contacts=='true' %}selected{% endif %}>Да</option>
+                <option value="false" {% if filters.has_contacts=='false' %}selected{% endif %}>Нет</option>
+            </select>
+        </label>
+        <label>Есть кампания
+            <select name="has_campaign">
+                <option value="">Любой</option>
+                <option value="true" {% if filters.has_campaign=='true' %}selected{% endif %}>Да</option>
+                <option value="false" {% if filters.has_campaign=='false' %}selected{% endif %}>Нет</option>
+            </select>
+        </label>
+        <div class="filters-actions companies-filter-actions">
+            <button type="submit">Применить</button>
+            <a class="btn-link" href="/ui/companies">Сбросить</a>
+        </div>
+    </form>
+
+    <div class="quick-chips-row">
+        <a class="quick-chip" href="/ui/companies?has_contacts=true">Только с контактами</a>
+        <a class="quick-chip" href="/ui/companies?has_campaign=false">Без кампании</a>
+        <a class="quick-chip" href="/ui/companies?status=qualified">Только qualified</a>
+        <a class="quick-chip" href="/ui/companies?score_min=80">Score 80+</a>
+        <a class="quick-chip" href="/ui/companies?country=Lithuania">Lithuania</a>
+    </div>
+
+    <div class="quick-chips-row category-quick-row">
+        {% for opt in bucket_options %}
+        <a class="quick-chip {% if (industry_bucket or 'all') == opt.key %}active{% endif %}" href="/ui/companies?industry_bucket={{ opt.key }}">{{ opt.label }}</a>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="card">
+    <div class="companies-summary-strip">
+        <div class="summary-pill">
+            <span>Найдено компаний</span>
+            <strong>{{ summary.total }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Qualified</span>
+            <strong>{{ summary.qualified }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>С контактами</span>
+            <strong>{{ summary.with_contacts }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Без кампании</span>
+            <strong>{{ summary.without_campaign }}</strong>
+        </div>
+        <div class="summary-pill summary-pill-action">
+            {% if summary.unprepared | default(0) > 0 %}
+            <button id="btn-prepare-all" class="btn-prepare-all" onclick="startPrepareAll()">
+                ⚙ Подготовить ({{ summary.unprepared }} не готово)
+            </button>
+            {% else %}
+            <button id="btn-prepare-all" class="btn-prepare-all btn-prepare-done" disabled>
+                ✓ Все компании готовы
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div id="prepare-all-progress" class="prepare-all-progress" style="display:none">
+        <div class="pa-progress-header">
+            <span id="pa-label">Запуск...</span>
+            <span id="pa-pct" class="pa-pct-badge">0%</span>
+        </div>
+        <div class="pa-bar-track">
+            <div id="pa-bar-fill" class="pa-bar-fill" style="width:0%"></div>
+        </div>
+        <div class="pa-counts">
+            <span id="pa-counts-text">0 / 0 компаний</span>
+            <span id="pa-errors-text" class="pa-errors" style="display:none"></span>
+        </div>
+    </div>
+
+    <script>
+    (function(){
+        var _jobId = null;
+        var _pollTimer = null;
+        var LS_KEY = 'prepare_all_job_id';
+
+        function applyProgress(d) {
+            var pct = d.pct || 0;
+            var progressEl = document.getElementById('prepare-all-progress');
+            var btn = document.getElementById('btn-prepare-all');
+            progressEl.style.display = 'block';
+            document.getElementById('pa-bar-fill').style.width = pct + '%';
+            document.getElementById('pa-pct').textContent = pct + '%';
+                document.getElementById('pa-counts-text').textContent = (d.done || 0) + ' / ' + (d.total || '?') + ' компаний';
+            if (d.errors > 0) {
+                var errEl = document.getElementById('pa-errors-text');
+                errEl.style.display = 'inline';
+                errEl.textContent = 'ошибок: ' + d.errors;
+            }
+            if (d.status === 'done') {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
+                localStorage.removeItem(LS_KEY);
+                document.getElementById('pa-label').textContent = '✓ Готово';
+                btn.textContent = '✓ Готово — обновить страницу';
+                btn.disabled = false;
+                btn.onclick = function(){ location.reload(); };
+            } else {
+                document.getElementById('pa-label').textContent = 'Обработка компаний...';
+                btn.disabled = true;
+                btn.textContent = '⏳ Выполняется...';
+            }
+        }
+
+        function pollProgress() {
+            if (!_jobId) return;
+            fetch('/ui/companies/prepare-all/status?job_id=' + _jobId)
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                if (d.error) {
+                    // job expired or not found — clear
+                    clearInterval(_pollTimer);
+                    localStorage.removeItem(LS_KEY);
+                    return;
+                }
+                applyProgress(d);
+            })
+            .catch(function(e){ console.error('pollProgress failed:', e); });
+        }
+
+        function resumeIfRunning() {
+            var saved = localStorage.getItem(LS_KEY);
+            if (!saved) return;
+            _jobId = saved;
+            // Immediately fetch current state
+            fetch('/ui/companies/prepare-all/status?job_id=' + _jobId)
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                if (d.error) { localStorage.removeItem(LS_KEY); return; }
+                applyProgress(d);
+                if (d.status !== 'done') {
+                    _pollTimer = setInterval(pollProgress, 2000);
+                }
+            });
+        }
+
+        window.startPrepareAll = function() {
+            var btn = document.getElementById('btn-prepare-all');
+            var progressEl = document.getElementById('prepare-all-progress');
+            var form = document.querySelector('.companies-filters');
+            var body = form ? new FormData(form) : new FormData();
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Запуск...';
+            progressEl.style.display = 'block';
+            document.getElementById('pa-label').textContent = 'Запуск...';
+
+            fetch('/ui/companies/prepare-all', { method: 'POST', body: body })
+            .then(function(r){
+                if (!r.ok) {
+                    return r.text().then(function(t){ throw new Error('HTTP ' + r.status + ': ' + t.slice(0,200)); });
+                }
+                return r.json();
+            })
+            .then(function(data){
+                if (data.error) {
+                    btn.textContent = '⚠ ' + data.error;
+                    btn.disabled = false;
+                    document.getElementById('pa-label').textContent = '⚠ ' + data.error;
+                    return;
+                }
+                _jobId = data.job_id;
+                localStorage.setItem(LS_KEY, _jobId);
+                document.getElementById('pa-label').textContent = 'Обработка компаний...';
+                document.getElementById('pa-counts-text').textContent = '0 / ' + (data.total || '?') + ' компаний';
+                if (_pollTimer) clearInterval(_pollTimer);
+                pollProgress();
+                _pollTimer = setInterval(pollProgress, 2000);
+            })
+            .catch(function(e){
+                btn.textContent = '⚠ Ошибка';
+                btn.disabled = false;
+                document.getElementById('pa-label').textContent = '⚠ ' + e.message;
+                console.error('prepare-all POST failed:', e);
+            });
+        };
+
+        // Auto-resume on page load
+        resumeIfRunning();
+    })();
+    </script>
+
+    <table class="companies-table">
+        <thead>
+            <tr>
+                <th>Домен</th>
+                <th>Компания</th>
+                <th>Страна</th>
+                <th>Профиль</th>
+                <th>Score</th>
+                <th>Статус</th>
+                <th>Релевантность</th>
+                <th>Язык</th>
+                <th>Контакты</th>
+                <th>Кампания</th>
+                <th>Обновлена</th>
+                <th>Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            {% if row is mapping and 'company' in row %}
+            {% set company = row['company'] %}
+            {% set has_contacts_value = row.get('has_contacts', false) %}
+            {% set has_campaign_value = row.get('has_campaign', false) %}
+            {% set has_draft_value = row.get('has_draft', false) %}
+            {% set profile = row.get('profile', {'category': 'Прочее / неясно', 'subcategory': 'не определено', 'source': (company.industry or '-'), 'language_chip': '-'}) %}
+            {% set relevance = row.get('relevance', {'level': 'maybe', 'label': 'Возможно'}) %}
+            {% else %}
+            {% set company = row[0] %}
+            {% set has_contacts_value = row[1] %}
+            {% set has_campaign_value = row[2] %}
+            {% set has_draft_value = false %}
+            {% set profile = {'category': 'Прочее / неясно', 'subcategory': 'не определено', 'source': (company.industry or '-'), 'language_chip': '-'} %}
+            {% set relevance = {'level': 'maybe', 'label': 'Возможно'} %}
+            {% endif %}
+            <tr>
+                <td class="cell-domain"><strong>{{ company.domain }}</strong></td>
+                <td class="cell-company">
+                    <span class="clamp-2" title="{{ company.name or '-' }}">{{ company.name or '-' }}</span>
+                </td>
+                <td>{{ company.country or '-' }}</td>
+                <td class="cell-profile">
+                    <div class="profile-main" title="{{ profile.category }}">{{ profile.category }}</div>
+                    <div class="profile-sub" title="{{ profile.subcategory }}">{{ profile.subcategory }}</div>
+                    <div class="profile-source clamp-2" title="{{ profile.source }}">{{ profile.source }}</div>
+                </td>
+                <td>
+                    {% if company.score is not none %}
+                    <span class="score-chip">{{ "%.2f"|format(company.score) }}</span>
+                    {% else %}
+                    <span class="muted">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {{ ui.status_chip(normalize_status(company.status), status_label(company.status)) }}
+                </td>
+                <td>{{ ui.relevance_chip(relevance.level, relevance.label) }}</td>
+                <td>{{ ui.lang_chip(profile.language_chip) }}</td>
+                <td>{{ ui.bool_chip(has_contacts_value, 'Есть', 'Нет') }}</td>
+                <td>{{ ui.bool_chip(has_campaign_value, 'Есть', 'Нет') }}</td>
+                <td>{{ format_compact_dt(company.updated_at) }}</td>
+                <td>
+                    <div class="row-actions companies-actions">
+                        <a class="btn-link btn-compact" href="/ui/companies/{{ company.id }}">Открыть</a>
+                        <form method="post" action="/ui/companies/{{ company.id }}/prepare" style="display:inline">
+                            <button class="btn-compact btn-primary-soft" type="submit" title="Исследование→квалификация→контакты→черновик письма">Подготовить</button>
+                        </form>
+                        <form method="post" action="/ui/companies/{{ company.id }}/send-draft" style="display:inline">
+                            <button class="btn-compact {% if has_draft_value %}btn-success{% else %}btn-disabled{% endif %}" type="submit"
+                                {% if not has_draft_value %}disabled title="Сначала нажмите «Подготовить»"{% else %}title="Создать кампанию и отправить первое письмо"{% endif %}>
+                                Отправить
+                            </button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="12" class="muted">Компании не найдены.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

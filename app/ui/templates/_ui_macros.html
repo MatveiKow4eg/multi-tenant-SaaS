@@ -1,0 +1,36 @@
+{% macro status_chip(status_code, status_text) -%}
+<span class="chip chip-status status-{{ status_code|default('unknown') }}">{{ status_text }}</span>
+{%- endmacro %}
+
+{% macro bool_chip(value, yes_text='Да', no_text='Нет') -%}
+{% if value %}
+<span class="chip chip-yes">{{ yes_text }}</span>
+{% else %}
+<span class="chip chip-no">{{ no_text }}</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro lang_chip(value) -%}
+<span class="chip chip-lang">{{ value or '-' }}</span>
+{%- endmacro %}
+
+{% macro relevance_chip(level, label) -%}
+<span class="chip chip-relevance relevance-{{ level|default('maybe') }}">{{ label }}</span>
+{%- endmacro %}
+
+{% macro row_action_menu(company_id) -%}
+<details class="row-menu">
+    <summary>Еще</summary>
+    <div class="row-menu-list">
+        <form method="post" action="/ui/companies/{{ company_id }}/research-qualify">
+            <button type="submit">Запустить research+qualify</button>
+        </form>
+        <form method="post" action="/ui/companies/{{ company_id }}/outreach/generate">
+            <button type="submit">Сгенерировать outreach</button>
+        </form>
+        <form method="post" action="/ui/companies/{{ company_id }}/refresh-contacts">
+            <button type="submit">Обновить контакты</button>
+        </form>
+    </div>
+</details>
+{%- endmacro %}
