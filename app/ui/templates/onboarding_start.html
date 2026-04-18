@@ -21,14 +21,6 @@
                 </li>
                 <li class="onb-step" data-step="3">
                     <span class="onb-step-num">3</span>
-                    <span class="onb-step-label">Sender</span>
-                </li>
-                <li class="onb-step" data-step="4">
-                    <span class="onb-step-num">4</span>
-                    <span class="onb-step-label">Test</span>
-                </li>
-                <li class="onb-step" data-step="5">
-                    <span class="onb-step-num">5</span>
                     <span class="onb-step-label">Ready</span>
                 </li>
             </ol>
@@ -63,6 +55,17 @@
                                 value="{{ company_name }}"
                                 maxlength="255" 
                                 placeholder="Company Name"
+                            />
+                        </label>
+
+                        <label class="onb-form-group">
+                            <span class="onb-label">Sender name (optional)</span>
+                            <input
+                                type="text"
+                                name="sender_name"
+                                value="{{ sender_name }}"
+                                maxlength="255"
+                                placeholder="Your Name"
                             />
                         </label>
                     </form>
@@ -299,7 +302,7 @@
                     <div class="onb-step2-bottom-actions">
                         {% set active_domain = sender_domains[0] %}
                         {% if active_domain and active_domain.ownership_status == 'verified' and active_domain.spf_status == 'verified' and active_domain.dkim_status == 'verified' and active_domain.dmarc_status == 'verified' %}
-                        <button type="button" class="onb-btn-primary onb-btn-primary-strong onb-step2-action" data-step2-action="next" data-domain-id="{{ active_domain.id }}">Continue to Sender</button>
+                        <button type="button" class="onb-btn-primary onb-btn-primary-strong onb-step2-action" data-step2-action="next" data-domain-id="{{ active_domain.id }}">Continue to Ready</button>
                         {% endif %}
                     </div>
                     {% endif %}
@@ -356,64 +359,14 @@
                     </div>
                 </div>
 
-                <!-- Step 3: Sender -->
+                <!-- Step 3: Ready -->
                 <div class="onb-panel" data-step="3">
-                    <h3 class="onb-panel-title">Sender email</h3>
-                    <p class="onb-panel-subtitle">Set up your default sender.</p>
-                    <form id="step-3-form" class="onb-form" data-step="3">
-                        <input type="hidden" name="step" value="3">
-                        <input type="hidden" name="action" value="next">
-
-                        <label class="onb-form-group">
-                            <span class="onb-label">Sender name</span>
-                            <input 
-                                type="text" 
-                                name="sender_name" 
-                                value="{{ sender_name }}"
-                                placeholder="Your Name" 
-                                maxlength="255"
-                            />
-                        </label>
-
-                        <label class="onb-form-group">
-                            <span class="onb-label">Sender email</span>
-                            <input 
-                                type="email" 
-                                name="sender_email" 
-                                value="{{ sender_email }}"
-                                placeholder="hello@{{ company_domain or 'company.com' }}" 
-                                required 
-                            />
-                        </label>
-                    </form>
-                </div>
-
-                <!-- Step 4: Test -->
-                <div class="onb-panel" data-step="4">
-                    <h3 class="onb-panel-title">Test email</h3>
-                    <p class="onb-panel-subtitle">Send a test email to verify everything works.</p>
-                    <form id="step-4-form" class="onb-form" data-step="4">
-                        <input type="hidden" name="step" value="4">
-                        <input type="hidden" name="action" value="next">
-
-                        <label class="onb-form-group">
-                            <span class="onb-label">Recipient email</span>
-                            <input 
-                                type="email" 
-                                name="recipient_email" 
-                                value="{{ recipient_email }}"
-                                placeholder="test@example.com" 
-                                required 
-                            />
-                        </label>
-                        <p class="onb-text-muted">We'll send you a test email to confirm deliverability.</p>
-                    </form>
-                </div>
-
-                <!-- Step 5: Ready -->
-                <div class="onb-panel" data-step="5">
                     <h3 class="onb-panel-title">You're all set!</h3>
                     <p class="onb-panel-subtitle">Your workspace is ready to use.</p>
+                    <form id="step-3-form" class="onb-form" data-step="3">
+                        <input type="hidden" name="step" value="3">
+                        <input type="hidden" name="action" value="finish">
+                    </form>
                     <div class="onb-ready-summary">
                         <div class="onb-check-item">
                             <span class="onb-check-icon">✓</span>
@@ -426,10 +379,6 @@
                         <div class="onb-check-item">
                             <span class="onb-check-icon">✓</span>
                             <span>Sender configured</span>
-                        </div>
-                        <div class="onb-check-item">
-                            <span class="onb-check-icon">✓</span>
-                            <span>Test email sent</span>
                         </div>
                     </div>
                 </div>
@@ -447,7 +396,7 @@
 <script>
 (function() {
     let currentStep = 1;
-    const totalSteps = 5;
+    const totalSteps = 3;
     const initialStep = Number('{{ initial_step }}') || 1;
     const btnBack = document.getElementById('btn-back');
     const btnContinue = document.getElementById('btn-continue');
@@ -533,8 +482,8 @@
             return response.json();
         }
 
-        if (response.status === 303 || response.status === 302) {
-            window.location.href = response.url;
+        if (response.redirected || response.status === 303 || response.status === 302) {
+            window.location.href = '/ui';
             return { success: true };
         }
         if (response.ok) {
@@ -549,10 +498,17 @@
     });
 
     btnContinue.addEventListener('click', async () => {
-        // For step 5, no form submission needed (finish action)
-        if (currentStep === 5) {
-            // Finish setup - redirect to workspace
-            window.location.href = '/ui';
+        // For last step, no form submission needed (finish action)
+        if (currentStep === totalSteps) {
+            try {
+                const result = await submitStepForm(currentStep, 'finish');
+                if (!result.success) {
+                    showOnboardingError(result.error || 'Failed to finish onboarding');
+                }
+            } catch (err) {
+                console.error('Finish error:', err);
+                showOnboardingError('Failed to finish onboarding: ' + err.message);
+            }
             return;
         }
 
@@ -948,19 +904,6 @@
 
     // Initialize workspace name on page load
     updateWorkspaceName();
-
-    // Auto-fill sender_email based on company domain
-    function initSenderEmail() {
-        const senderEmailInput = document.querySelector('input[name="sender_email"]');
-        const companyDomain = '{{ company_domain or "" }}'.trim();
-        
-        if (senderEmailInput && companyDomain && !senderEmailInput.value) {
-            senderEmailInput.placeholder = `hello@${companyDomain}`;
-        }
-    }
-    
-    // Initialize sender email on page load
-    initSenderEmail();
 
     // Start from requested step
     goToStep(initialStep);

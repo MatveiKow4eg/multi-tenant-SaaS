@@ -707,6 +707,10 @@ def dashboard(
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    flash_message = (request.query_params.get("msg") or "").strip()
+    if flash_message.lower().startswith("onboarding"):
+        return RedirectResponse(url="/ui", status_code=303)
+
     legacy_global_scope = False
     companies_q = _dashboard_company_query(db, tenant_id)
     status_counts_rows = companies_q.with_entities(Company.status, func.count(Company.id)).group_by(Company.status).all()
@@ -3188,6 +3192,20 @@ def onboarding_start_page(
     if tenant is None:
         return _flash_redirect("/ui/login", error="Workspace не найден")
 
+    onboarding_completed = (
+        db.query(AuditLog.id)
+        .filter(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "onboarding_completed",
+            AuditLog.entity_type == "tenant",
+            AuditLog.entity_id == tenant_id,
+        )
+        .first()
+        is not None
+    )
+    if onboarding_completed:
+        return RedirectResponse(url="/ui", status_code=303)
+
     company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
     from sqlalchemy.orm import joinedload as _jl
     sender_domains = (
@@ -3213,7 +3231,22 @@ def onboarding_start_page(
         db.commit()
     sender_domain = sender_domains[0] if sender_domains else None
 
-    initial_step = max(1, min(step, 5))
+    last_company_audit = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "onboarding_company_saved",
+            AuditLog.entity_type == "tenant",
+            AuditLog.entity_id == tenant_id,
+        )
+        .order_by(AuditLog.id.desc())
+        .first()
+    )
+    sender_name_value = ""
+    if last_company_audit and isinstance(last_company_audit.details, dict):
+        sender_name_value = str(last_company_audit.details.get("sender_name") or "").strip()
+
+    initial_step = max(1, min(step, 3))
     step2_completed = bool(
         sender_domain
         and sender_domain.ownership_status == "verified"
@@ -3236,9 +3269,7 @@ def onboarding_start_page(
         "domain_dns_records": sender_domain.dns_records if sender_domain else [],
         "sender_domains": sender_domains,
         "step2_completed": step2_completed,
-        "sender_name": "",
-        "sender_email": "",
-        "recipient_email": "",
+        "sender_name": sender_name_value,
         "initial_step": initial_step,
         "initial_domain_id": domain_id,
     }
@@ -3254,21 +3285,33 @@ def onboarding_start_submit(
     company_website: str = Form(default=""),
     company_name: str = Form(default=""),
     sender_name: str = Form(default=""),
-    sender_email: str = Form(default=""),
-    recipient_email: str = Form(default=""),
     domain_id: int | None = Form(default=None),
     verify_domain: str = Form(default=""),
     ownership_email: str = Form(default=""),
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> RedirectResponse | dict:
-    """Handle all onboarding steps (1-5) within single screen."""
+    """Handle all onboarding steps (1-3) within single screen."""
     if tenant_id is None or tenant_id <= 0:
         return {"success": False, "error": "Сессия не найдена"}
 
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if tenant is None:
         return {"success": False, "error": "Workspace не найден"}
+
+    onboarding_completed = (
+        db.query(AuditLog.id)
+        .filter(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "onboarding_completed",
+            AuditLog.entity_type == "tenant",
+            AuditLog.entity_id == tenant_id,
+        )
+        .first()
+        is not None
+    )
+    if onboarding_completed:
+        return RedirectResponse(url="/ui", status_code=303)
 
     # Step 1: Company details
     if step == 1:
@@ -3320,7 +3363,12 @@ def onboarding_start_submit(
             action="onboarding_company_saved",
             entity_type="tenant",
             entity_id=tenant_id,
-            details={"workspace_name": tenant.name, "website": company_website.strip(), "domain": domain},
+            details={
+                "workspace_name": tenant.name,
+                "website": company_website.strip(),
+                "domain": domain,
+                "sender_name": _trim(sender_name) or "",
+            },
         ))
         db.commit()
 
@@ -3511,71 +3559,51 @@ def onboarding_start_submit(
                     "success": False,
                     "error": "Domain setup is not complete yet. Verify ownership and run authentication DNS checks.",
                 }
+            sender_email_clean = sender_domain.send_from_email.strip().lower()
+            configured_sender_name = _trim(sender_name) or ""
+            if not configured_sender_name:
+                last_company_audit = (
+                    db.query(AuditLog)
+                    .filter(
+                        AuditLog.tenant_id == tenant_id,
+                        AuditLog.action == "onboarding_company_saved",
+                        AuditLog.entity_type == "tenant",
+                        AuditLog.entity_id == tenant_id,
+                    )
+                    .order_by(AuditLog.id.desc())
+                    .first()
+                )
+                if last_company_audit and isinstance(last_company_audit.details, dict):
+                    configured_sender_name = str(last_company_audit.details.get("sender_name") or "").strip()
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                action="onboarding_sender_configured",
+                entity_type="tenant",
+                entity_id=tenant_id,
+                details={
+                    "sender_name": configured_sender_name,
+                    "sender_email": sender_email_clean,
+                    "source": "auto_from_verified_domain",
+                },
+            ))
+            db.commit()
             return {"success": True, "next_step": 3}
 
         return {"success": False, "error": "Unknown step 2 action."}
 
-    # Step 3: Sender setup
+    # Step 3: Complete onboarding
     if step == 3:
-        if not sender_email.strip():
-            return {"success": False, "error": "Укажите sender email"}
-        
-        sender_email_clean = sender_email.strip().lower()
-        
-        # Validate email format
-        if "@" not in sender_email_clean or len(sender_email_clean) < 5:
-            return {"success": False, "error": "Некорректный формат email"}
-        
-        # Get company domain
-        company = db.query(Company).filter(Company.tenant_id == tenant_id).first()
-        if not company or not company.domain:
-            return {"success": False, "error": "Компания не найдена. Вернитесь на шаг 1."}
-        
-        # Check if email belongs to company domain
-        email_domain = sender_email_clean.split("@")[1]
-        if email_domain != company.domain:
-            return {"success": False, "error": f"Email должен быть с домена {company.domain}"}
-        
-        # Store sender email in session or temp storage for step 4
-        db.add(AuditLog(
-            tenant_id=tenant_id,
-            action="onboarding_sender_configured",
-            entity_type="tenant",
-            entity_id=tenant_id,
-            details={"sender_name": _trim(sender_name) or "", "sender_email": sender_email_clean},
-        ))
-        db.commit()
-        
-        return {"success": True, "next_step": 4}
-
-    # Step 4: Test email
-    if step == 4:
-        if not recipient_email.strip():
-            return {"success": False, "error": "Укажите recipient email для теста"}
-        
-        recipient_email_clean = recipient_email.strip().lower()
-        
-        # Validate email format
-        if "@" not in recipient_email_clean or len(recipient_email_clean) < 5:
-            return {"success": False, "error": "Некорректный формат recipient email"}
-        
-        # TODO: Send actual test email here
-        # For now just log it
-        db.add(AuditLog(
-            tenant_id=tenant_id,
-            action="onboarding_test_email_sent",
-            entity_type="tenant",
-            entity_id=tenant_id,
-            details={"recipient_email": recipient_email_clean, "sender_email": sender_email.strip()},
-        ))
-        db.commit()
-        
-        return {"success": True, "next_step": 5}
-
-    # Step 5: Complete onboarding
-    if step == 5:
         if action == "finish":
-            return _flash_redirect("/ui", message="Onboarding завершен! Добро пожаловать в workspace.")
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                action="onboarding_completed",
+                entity_type="tenant",
+                entity_id=tenant_id,
+                details={"completed_at": datetime.utcnow().isoformat()},
+                reason="User completed onboarding wizard.",
+            ))
+            db.commit()
+            return RedirectResponse(url="/ui", status_code=303)
         return {"success": True}
 
     return {"success": False, "error": "Invalid step"}
