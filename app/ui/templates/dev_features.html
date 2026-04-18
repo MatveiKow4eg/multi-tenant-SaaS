@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Dev features</h3>
+    <p class="muted">Development-only tools. On this page, operations are allowed when the feature toggle is enabled.</p>
+</section>
+
+<section class="card">
+    <h3>DELETE_USERS</h3>
+    <table class="compact-table">
+        <tbody>
+            <tr>
+                <th>Enabled</th>
+                <td><strong>{{ "true" if delete_users_enabled else "false" }}</strong></td>
+            </tr>
+            <tr>
+                <th>Action path</th>
+                <td>{{ delete_company_path if delete_users_enabled else "(hidden while feature is disabled)" }}</td>
+            </tr>
+            <tr>
+                <th>Companies in scope</th>
+                <td>{{ company_count }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    {% if delete_users_enabled %}
+    <div class="top-gap">
+        {% if companies %}
+        <table class="compact-table">
+            <thead><tr><th>ID</th><th>Name</th><th>Domain</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>
+                {% for company in companies %}
+                <tr>
+                    <td>{{ company.id }}</td>
+                    <td>{{ company.name or "-" }}</td>
+                    <td>{{ company.domain }}</td>
+                    <td>{{ company.status }}</td>
+                    <td>
+                        <form method="post" action="{{ delete_company_path }}" class="inline-form">
+                            <input type="hidden" name="company_id" value="{{ company.id }}" />
+                            <button type="submit">Delete company</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted small">Deletes the selected company and cascades removal of related objects in the current tenant scope.</p>
+        {% else %}
+        <p class="muted">No companies found in current tenant scope.</p>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Enable DELETE_USERS=true in FEATURE_TOGGLES to render the delete action path.</p>
+    {% endif %}
+</section>
+{% endblock %}
