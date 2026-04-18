@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     app_auto_create_tables: bool = Field(default=False, alias="APP_AUTO_CREATE_TABLES")
     auth_enforce_rbac: bool = Field(default=False, alias="AUTH_ENFORCE_RBAC")
     auth_require_email_verified: bool = Field(default=False, alias="AUTH_REQUIRE_EMAIL_VERIFIED")
+    feature_toggles_json: str = Field(default="{}", alias="FEATURE_TOGGLES")
     app_public_base_url: str = Field(default="http://localhost:8000", alias="APP_PUBLIC_BASE_URL")
     auth_session_cookie_name: str = Field(default="auth_session", alias="AUTH_SESSION_COOKIE_NAME")
     auth_session_cookie_secure: bool = Field(default=False, alias="AUTH_SESSION_COOKIE_SECURE")

@@ -66,6 +66,7 @@ from app.tasks.replies import ingest_and_classify
 from app.tasks.researcher import run_research_and_qualify
 from app.worker.celery_app import celery_app
 from app.core.config import settings
+from app.core.feature_toggles import active_feature_toggles, parse_feature_toggles
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -192,6 +193,8 @@ def _nav_key(path: str) -> str:
     if path.startswith("/ui/analytics"):
         return "analytics"
     if path.startswith("/ui/settings"):
+        return "settings"
+    if path.startswith("/ui/feature-toggles"):
         return "settings"
     if path.startswith("/ui/billing"):
         return "billing"
@@ -1583,6 +1586,20 @@ def settings_page(
         "recent_auth": recent_auth,
     }
     return templates.TemplateResponse(request, "settings.html", context)
+
+
+@router.get("/feature-toggles", response_class=HTMLResponse)
+def feature_toggles_page(request: Request) -> HTMLResponse:
+    all_toggles = parse_feature_toggles(settings.feature_toggles_json)
+    enabled_toggles = active_feature_toggles(settings.feature_toggles_json)
+
+    context = {
+        **_base_context(request, "Feature Toggles"),
+        "enabled_toggles": dict(sorted(enabled_toggles.items())),
+        "enabled_count": len(enabled_toggles),
+        "total_count": len(all_toggles),
+    }
+    return templates.TemplateResponse(request, "feature_toggles.html", context)
 
 
 # ---------------------------------------------------------------------------

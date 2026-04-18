@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Feature toggles</h3>
+    <p class="muted">This page is read-only and shows only active toggles from FEATURE_TOGGLES.</p>
+    <div class="companies-summary-strip">
+        <div class="summary-pill"><span>Active toggles</span><strong>{{ enabled_count }}</strong></div>
+        <div class="summary-pill"><span>Total in JSON</span><strong>{{ total_count }}</strong></div>
+    </div>
+</section>
+
+<section class="card">
+    <h3>Enabled now</h3>
+    {% if enabled_toggles %}
+    <table class="compact-table">
+        <thead><tr><th>Toggle name</th><th>State</th></tr></thead>
+        <tbody>
+            {% for name, state in enabled_toggles.items() %}
+            <tr>
+                <td>{{ name }}</td>
+                <td><strong>{{ "true" if state else "false" }}</strong></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No active toggles.</p>
+    {% endif %}
+</section>
+{% endblock %}
