@@ -1,45 +1,74 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui %}
 {% block content %}
+{% set stats = namespace(outbound=0, inbound=0, unsent=0) %}
+{% for msg, campaign, company, contact in rows %}
+    {% if msg.direction == 'outbound' %}
+        {% set stats.outbound = stats.outbound + 1 %}
+        {% if not msg.sent_at %}{% set stats.unsent = stats.unsent + 1 %}{% endif %}
+    {% else %}
+        {% set stats.inbound = stats.inbound + 1 %}
+    {% endif %}
+{% endfor %}
+
 <section class="card">
-    <h3>Фильтры</h3>
+    <h3>Message center</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill"><span>Outbound</span><strong>{{ stats.outbound }}</strong></div>
+        <div class="summary-pill"><span>Inbound</span><strong>{{ stats.inbound }}</strong></div>
+        <div class="summary-pill {% if stats.unsent > 0 %}summary-pill-risk{% endif %}"><span>Not sent</span><strong>{{ stats.unsent }}</strong></div>
+    </div>
+
+    {{ ui.alert_banner('info', 'Operational mode', 'Focus: send pending outbound first, then process inbound replies and handoffs.') }}
+
+    <h3>Filters</h3>
     <form method="get" class="filters-grid">
-        <label>Направление
+        <label>Direction
             <select name="direction">
-                <option value="">Любое</option>
-                <option value="outbound" {% if filters.direction=='outbound' %}selected{% endif %}>Исходящее</option>
-                <option value="inbound" {% if filters.direction=='inbound' %}selected{% endif %}>Входящее</option>
+                <option value="">Any</option>
+                <option value="outbound" {% if filters.direction=='outbound' %}selected{% endif %}>Outbound</option>
+                <option value="inbound" {% if filters.direction=='inbound' %}selected{% endif %}>Inbound</option>
             </select>
         </label>
-        <label>Статус отправки
+        <label>Delivery state
             <select name="sent_state">
-                <option value="">Любой</option>
-                <option value="sent" {% if filters.sent_state=='sent' %}selected{% endif %}>Отправлено/Получено</option>
-                <option value="not_sent" {% if filters.sent_state=='not_sent' %}selected{% endif %}>Не отправлено</option>
+                <option value="">Any</option>
+                <option value="sent" {% if filters.sent_state=='sent' %}selected{% endif %}>Sent/Received</option>
+                <option value="not_sent" {% if filters.sent_state=='not_sent' %}selected{% endif %}>Not sent</option>
             </select>
         </label>
-        <label>Компания <input type="text" name="company" value="{{ filters.company }}" /></label>
-        <label>Страна
+        <label>Company <input type="text" name="company" value="{{ filters.company }}" /></label>
+        <label>Country
             <select name="country">
-                <option value="">Любая</option>
+                <option value="">Any</option>
                 {% for c in countries %}<option value="{{ c }}" {% if filters.country==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
             </select>
         </label>
-        <label>Дата с <input type="date" name="date_from" value="{{ filters.date_from }}" /></label>
-        <label>Дата по <input type="date" name="date_to" value="{{ filters.date_to }}" /></label>
-        <div class="filters-actions"><button type="submit">Применить</button><a class="btn-link" href="/ui/messages">Сбросить</a></div>
+        <label>Date from <input type="date" name="date_from" value="{{ filters.date_from }}" /></label>
+        <label>Date to <input type="date" name="date_to" value="{{ filters.date_to }}" /></label>
+        <div class="filters-actions"><button type="submit">Apply</button><a class="btn-link" href="/ui/messages">Reset</a></div>
     </form>
 </section>
 
 <section class="card">
-    <h3>Сообщения</h3>
+    <h3>Messages timeline</h3>
     <table>
-        <thead><tr><th>ID</th><th>Кампания</th><th>Направление</th><th>Тема</th><th>Время</th><th>Превью</th><th>Компания</th><th>Контакт</th><th>Действие</th></tr></thead>
+        <thead><tr><th>ID</th><th>Campaign</th><th>Direction</th><th>Delivery</th><th>Subject</th><th>Time</th><th>Preview</th><th>Company</th><th>Contact</th><th>Action</th></tr></thead>
         <tbody>
             {% for msg, campaign, company, contact in rows %}
             <tr>
                 <td>{{ msg.id }}</td>
                 <td><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a></td>
-                <td>{{ msg.direction }}</td>
+                <td>{{ ui.status_chip(msg.direction or 'unknown', msg.direction or '-') }}</td>
+                <td>
+                    {% if msg.direction == 'outbound' and msg.sent_at %}
+                        {{ ui.severity_badge('success', 'sent') }}
+                    {% elif msg.direction == 'outbound' and not msg.sent_at %}
+                        {{ ui.severity_badge('warning', 'pending') }}
+                    {% else %}
+                        {{ ui.severity_badge('info', 'received') }}
+                    {% endif %}
+                </td>
                 <td>{{ msg.subject or '-' }}</td>
                 <td>{{ msg.sent_at or msg.received_at or '-' }}</td>
                 <td>{{ (msg.body or '')[:160] }}{% if msg.body and msg.body|length > 160 %}...{% endif %}</td>
@@ -48,14 +77,14 @@
                 <td>
                     {% if msg.direction == 'outbound' and not msg.sent_at and campaign.status == 'active' and not campaign.has_reply %}
                     <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now" class="inline-form">
-                        <button type="submit">Отправить сообщение</button>
+                        <button type="submit">Send message</button>
                     </form>
                     {% else %}
                     -
                     {% endif %}
                 </td>
             </tr>
-            {% else %}<tr><td colspan="9" class="muted">Сообщений нет.</td></tr>{% endfor %}
+            {% else %}<tr><td colspan="10" class="muted">No messages found.</td></tr>{% endfor %}
         </tbody>
     </table>
 </section>

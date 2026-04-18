@@ -66,6 +66,35 @@ def test_register_me_logout_flow():
         db.close()
 
 
+def test_register_without_tenant_name_generates_workspace_name():
+    db = _build_test_session()
+
+    def _override_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = _override_db
+    client = TestClient(app)
+
+    try:
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "autoname@example.com",
+                "password": "StrongPass123!",
+                "full_name": "Auto Name",
+            },
+        )
+        assert reg.status_code == 200
+        payload = reg.json()
+        assert payload["tenant_slug"].startswith("autoname-workspace")
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
 def test_logout_all_revokes_all_user_sessions():
     db = _build_test_session()
 
@@ -213,12 +242,33 @@ def test_api_login_returns_lockout_when_bruteforce_block_active(monkeypatch):
     monkeypatch.setattr("app.api.routes.auth.is_login_allowed", lambda **kwargs: False)
 
     try:
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "blocked@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Blocked Team",
+            },
+        )
+        assert reg.status_code == 200
+        tenant_id = reg.json()["tenant_id"]
+
         resp = client.post(
             "/api/auth/login",
             json={"email": "blocked@example.com", "password": "wrong-pass"},
         )
         assert resp.status_code == 429
         assert resp.json()["detail"] == "login_temporarily_locked"
+
+        audit_row = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_type == "auth", AuditLog.action == "auth_login_blocked")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert audit_row is not None
+        assert isinstance(audit_row.details, dict)
+        assert audit_row.details.get("tenant_id") == tenant_id
     finally:
         app.dependency_overrides.clear()
         db.close()
@@ -324,6 +374,83 @@ def test_api_auth_audit_events_are_written():
         assert "auth_login_failed" in actions
         assert "auth_login_success" in actions
         assert "auth_logout_all" in actions
+
+        tenant_id = reg.json()["tenant_id"]
+        failed_row = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_type == "auth", AuditLog.action == "auth_login_failed")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert failed_row is not None
+        assert isinstance(failed_row.details, dict)
+        assert failed_row.details.get("tenant_id") == tenant_id
+
+        success_row = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_type == "auth", AuditLog.action == "auth_login_success")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert success_row is not None
+        assert isinstance(success_row.details, dict)
+        assert success_row.details.get("tenant_id") == tenant_id
+
+        logout_all_row = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_type == "auth", AuditLog.action == "auth_logout_all")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert logout_all_row is not None
+        assert isinstance(logout_all_row.details, dict)
+        assert logout_all_row.details.get("tenant_id") == tenant_id
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_api_resend_verification_respects_cooldown(monkeypatch):
+    db = _build_test_session()
+
+    def _override_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = _override_db
+    client = TestClient(app)
+    state = {"calls": 0, "sent": 0}
+
+    def _fake_cooldown(**kwargs):
+        state["calls"] += 1
+        return state["calls"] == 1
+
+    def _fake_send_verification_email(*, to_email: str, verify_url: str):
+        state["sent"] += 1
+        return "ok"
+
+    try:
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "cooldown@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Cooldown Team",
+            },
+        )
+        assert reg.status_code == 200
+
+        monkeypatch.setattr("app.api.routes.auth.acquire_email_cooldown", _fake_cooldown)
+        monkeypatch.setattr("app.api.routes.auth.send_verification_email", _fake_send_verification_email)
+
+        r1 = client.post("/api/auth/resend-verification", json={"email": "cooldown@example.com"})
+        r2 = client.post("/api/auth/resend-verification", json={"email": "cooldown@example.com"})
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert state["sent"] == 1
     finally:
         app.dependency_overrides.clear()
         db.close()

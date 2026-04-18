@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:720px;margin:auto;">
+    <h3>Company details</h3>
+    <p class="muted">Enter your website to continue with domain verification.</p>
+
+    <form method="post" action="/ui/onboarding/company" class="stack-form" style="margin-top:1rem;">
+        <label>Workspace name
+            <input type="text" name="workspace_name" value="{{ workspace_name }}" minlength="2" maxlength="255" required />
+        </label>
+        <label>Company website
+            <input type="url" name="company_website" value="{{ company_website }}" placeholder="https://company.ee" required />
+        </label>
+        <label>Company name (optional)
+            <input type="text" name="company_name" value="{{ company_name }}" maxlength="255" />
+        </label>
+        <button type="submit">Continue to domain verification</button>
+    </form>
+</section>
+{% endblock %}

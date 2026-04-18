@@ -13,6 +13,8 @@ from app.models.message import Message, MessageDirection
 from app.models.schedule import Schedule
 from app.services.outreach.policy import get_blacklist_skip_reason, is_country_allowed_for_outreach
 from app.services.mail.zone_operator import send_zone_email
+from app.services.dns.generator import decrypt_dkim_private_key
+from app.services.sender_domains import resolve_active_dkim_key, resolve_sender_identity
 from app.worker.celery_app import celery_app
 
 
@@ -81,6 +83,28 @@ def send_campaign_step(self, campaign_id: int) -> dict:
         if not company or not contact:
             return {"ok": False, "error": "campaign_data_missing", "campaign_id": campaign_id}
 
+        min_score = float(settings.outreach_min_qualification_score)
+        score = float(company.score or 0)
+        if company.score is None or score < min_score:
+            campaign.status = CampaignStatus.stopped
+            db.add(campaign)
+            db.add(
+                AuditLog(
+                    entity_type="campaign",
+                    entity_id=campaign.id,
+                    tenant_id=company.tenant_id if company else None,
+                    action="campaign_stopped",
+                    details={
+                        "reason": "qualification_score_below_min",
+                        "score": company.score,
+                        "min_score": min_score,
+                    },
+                    reason="Stopped because qualification score is below configured minimum.",
+                )
+            )
+            db.commit()
+            return {"ok": False, "error": "qualification_score_below_min", "campaign_id": campaign_id}
+
         if not is_country_allowed_for_outreach(company.country):
             campaign.status = CampaignStatus.stopped
             db.add(campaign)
@@ -88,6 +112,7 @@ def send_campaign_step(self, campaign_id: int) -> dict:
                 AuditLog(
                     entity_type="campaign",
                     entity_id=campaign.id,
+                    tenant_id=company.tenant_id if company else None,
                     action="campaign_stopped",
                     details={"reason": "country_not_allowed", "country": company.country},
                     reason="Skipped because country not allowed for outreach.",
@@ -108,6 +133,7 @@ def send_campaign_step(self, campaign_id: int) -> dict:
                 AuditLog(
                     entity_type="campaign",
                     entity_id=campaign.id,
+                    tenant_id=company.tenant_id if company else None,
                     action="campaign_stopped",
                     details={"reason": blacklist_reason},
                     reason="Domain or email is in blacklist.",
@@ -143,6 +169,16 @@ def send_campaign_step(self, campaign_id: int) -> dict:
             .first()
         )
 
+        sender_domain = resolve_sender_identity(db=db, tenant_id=company.tenant_id)
+        if sender_domain is None:
+            return {"ok": False, "error": "no_verified_sender_domain", "campaign_id": campaign.id}
+        dkim_material = resolve_active_dkim_key(sender_domain)
+        if dkim_material is None:
+            return {"ok": False, "error": "sender_domain_missing_dkim_key", "campaign_id": campaign.id}
+        dkim_selector, private_key_encrypted = dkim_material
+        dkim_private_key_pem = decrypt_dkim_private_key(private_key_encrypted)
+        from_email = sender_domain.send_from_email
+
         now = datetime.now(timezone.utc)
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         sent_today = (
@@ -151,7 +187,7 @@ def send_campaign_step(self, campaign_id: int) -> dict:
                 Message.direction == MessageDirection.outbound,
                 Message.sent_at.isnot(None),
                 Message.sent_at >= start_of_day,
-                Message.from_email == settings.zone_email,
+                Message.from_email == from_email,
             )
             .scalar()
             or 0
@@ -177,7 +213,7 @@ def send_campaign_step(self, campaign_id: int) -> dict:
             .filter(
                 Message.direction == MessageDirection.outbound,
                 Message.sent_at.isnot(None),
-                Message.from_email == settings.zone_email,
+                Message.from_email == from_email,
             )
             .order_by(Message.sent_at.desc())
             .first()
@@ -205,11 +241,15 @@ def send_campaign_step(self, campaign_id: int) -> dict:
             subject=msg.subject or "Partnership inquiry",
             body=msg.body or "",
             in_reply_to=last_sent.message_id if last_sent else None,
+            from_email=from_email,
+            dkim_selector=dkim_selector,
+            dkim_domain=sender_domain.domain,
+            dkim_private_key_pem=dkim_private_key_pem,
         )
 
         msg.message_id = message_id
         msg.sent_at = now
-        msg.from_email = settings.zone_email
+        msg.from_email = from_email
         msg.to_email = contact.email
         msg.thread_reference = last_sent.message_id if last_sent else None
         if msg.step is not None:
@@ -226,6 +266,8 @@ def send_campaign_step(self, campaign_id: int) -> dict:
                     "step": msg.step,
                     "message_id": message_id,
                     "to": contact.email,
+                    "from": from_email,
+                    "sender_domain_id": sender_domain.id,
                 },
                 reason="Mail Operator sent outbound email via Zone SMTP.",
             )

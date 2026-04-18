@@ -330,3 +330,19 @@ API лучше разделить на категории:
 Следующий практический шаг:
 - Довести RBAC до полного coverage read-only маршрутов (где нужно) и админ-экрана управления участниками tenant.
 - Добавить refresh/rotation policy для cookie-сессий и серверный revoke-all-sessions per user.
+
+Сделано на 2026-04-18 (Фаза B — Deliverability & Mail Ops):
+- Реализован production-ready DNS Wizard для sender domains: API на `/api/sender-domains` (legacy alias `/api/domains` сохранен), UI `/ui/domains`, multi-tenant isolation, реальные статусы `pending/verified/failed`.
+- DNS records теперь генерируются как готовые SaaS-записи без заглушек: SPF, DMARC и managed DKIM через два CNAME selector records (`s1`, `s2`) с архитектурой под backend key rotation.
+- Добавлены сущности `sender_domain_dns_records`, `dkim_key_pairs`, `managed_dkim_selectors`; private DKIM keys хранятся encrypted, ротация selector/key pair делается без изменения клиентских CNAME записей.
+- Реализована реальная серверная DNS-проверка per-record для TXT/CNAME с результатами `verified/missing/mismatch`, `last_checked_at`, `actual_value`, `error_message`.
+- Исходящие письма теперь используют verified sender identity (`hello@your-domain`) и подписываются DKIM ключом выбранного sender domain перед отправкой.
+- Добавлена авто-пауза кампаний при превышении bounce rate (`OUTREACH_MAX_BOUNCE_RATE=0.10`, `OUTREACH_BOUNCE_MIN_SENT=5`): при bounce rate ≥ порога все активные кампании домена переходят в `paused` + audit log.
+- Добавлена ссылка DNS Wizard в навигацию сайдбара.
+- Написаны и обновлены тесты для managed DKIM, DNS verification и outbound sender identity.
+- **Фаза B закрыта.**
+
+Следующий шаг — Фаза C: AI & Data Quality:
+- Мульти-провайдерный слой AI + fallback (OpenAI → cheaper model).
+- Confidence score для квалификации лидов.
+- Контур проверки качества генерации сообщений.

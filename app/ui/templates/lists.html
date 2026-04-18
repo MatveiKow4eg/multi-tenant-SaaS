@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Lists</h3>
+    <p class="muted">Сегменты связывают Search, Companies и Campaigns. Используйте списки для стабильных подборок и повторного запуска кампаний.</p>
+</section>
+
+<section class="card">
+    <h3>Saved lists</h3>
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Type</th><th>Records</th><th>Source</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+            {% for row in sample_lists %}
+            <tr>
+                <td>{{ row.name }}</td>
+                <td>{{ row.type }}</td>
+                <td>{{ row.records }}</td>
+                <td>{{ row.source }}</td>
+                <td><a class="btn-link" href="/ui/companies">Open source data</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="muted">Списков пока нет.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="card">
+    <h3>List actions</h3>
+    <div class="row-actions">
+        <a class="btn-link" href="/ui/companies">Создать список из Search</a>
+        <a class="btn-link" href="/ui/contacts">Создать список из Contacts</a>
+        <a class="btn-link" href="/ui/campaigns">Запустить кампанию по списку</a>
+    </div>
+</section>
+{% endblock %}

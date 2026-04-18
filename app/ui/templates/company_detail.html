@@ -1,7 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-    <h3>Компания</h3>
+    <div class="section-nav">
+        <a class="quick-chip active" href="#overview">Overview</a>
+        <a class="quick-chip" href="#contacts">Contacts</a>
+        <a class="quick-chip" href="#activity">Activity</a>
+        <a class="quick-chip" href="#campaigns">Campaigns</a>
+        <a class="quick-chip" href="#ai-insights">AI Insights</a>
+    </div>
+</section>
+
+<section class="card">
+    <h3 id="overview">Company overview</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill">
+            <span>Company</span>
+            <strong>{{ company.name or company.domain }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Status</span>
+            <strong>{{ company.status }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Lead score</span>
+            <strong>{{ company.score if company.score is not none else '-' }}</strong>
+        </div>
+        <div class="summary-pill {% if domain_blacklist %}summary-pill-risk{% endif %}">
+            <span>Domain risk</span>
+            <strong>{% if domain_blacklist %}Blacklisted{% else %}Clean{% endif %}</strong>
+        </div>
+    </div>
+
     <div class="details-grid">
         <div><strong>ID:</strong> {{ company.id }}</div>
         <div><strong>Домен:</strong> {{ company.domain }}</div>
@@ -14,7 +43,7 @@
     </div>
 
     <div class="top-gap">
-        <h4>Статус подготовки</h4>
+        <h4>Preparation pipeline</h4>
         <div class="prep-status-grid">
             <div class="prep-step {% if pipeline_status.research == 'done' %}done{% else %}pending{% endif %}">
                 <span>Исследование</span>
@@ -37,10 +66,10 @@
 
     <div class="row-actions top-gap">
         <form method="post" action="/ui/companies/{{ company.id }}/prepare">
-            <button type="submit">Подготовить компанию</button>
+            <button type="submit">Prepare company</button>
         </form>
         <details class="row-menu">
-            <summary>Доп. действия</summary>
+            <summary>More actions</summary>
             <div class="row-menu-list">
                 <form method="post" action="/ui/companies/{{ company.id }}/research-qualify"><button type="submit">Перезапустить research+qualify</button></form>
                 <form method="post" action="/ui/companies/{{ company.id }}/refresh-contacts"><button type="submit">Обновить контакты</button></form>
@@ -54,8 +83,8 @@
     </form>
 
     {% if outreach_draft %}
-    <div class="top-gap">
-        <h4>Outreach draft (без кампании)</h4>
+    <div class="top-gap" id="ai-insights">
+        <h4>AI Outreach draft (без кампании)</h4>
         <p class="muted small">{{ outreach_draft.created_at }}</p>
         <pre>{{ outreach_draft.details }}</pre>
     </div>
@@ -64,11 +93,11 @@
 
 <section class="split-2">
     <article class="card">
-        <h3>Результат qualification</h3>
+        <h3>AI insights</h3>
         {% if qualification %}
-        <div><strong>Причина:</strong> {{ qualification.get('reason', '-') }}</div>
+        <div><strong>Reason:</strong> {{ qualification.get('reason', '-') }}</div>
         <div><strong>Score:</strong> {{ qualification.get('score', '-') }}</div>
-        <div><strong>Сигналы:</strong></div>
+        <div><strong>Signals:</strong></div>
         <ul>
             {% for signal in signals %}<li>{{ signal }}</li>{% else %}<li class="muted">Сигналов нет.</li>{% endfor %}
         </ul>
@@ -78,8 +107,8 @@
         {% endif %}
     </article>
 
-    <article class="card">
-        <h3>Причины пропуска / статусные заметки</h3>
+    <article class="card" id="activity">
+        <h3>Activity / skip reasons</h3>
         <ul class="plain-list">
             {% for row in skip_logs %}
             <li>
@@ -95,7 +124,7 @@
 </section>
 
 <section class="card">
-    <h3>Найденные страницы</h3>
+    <h3>Research pages</h3>
     <table>
         <thead><tr><th>ID</th><th>URL</th><th>Тип</th><th>Собрано</th></tr></thead>
         <tbody>
@@ -106,7 +135,7 @@
     </table>
 </section>
 
-<section class="card">
+<section class="card" id="contacts">
     <h3>Контакты</h3>
     <table>
         <thead><tr><th>ID</th><th>Email</th><th>Роль</th><th>Confidence</th><th>Источник</th><th>Blacklist</th><th>Действие</th></tr></thead>
@@ -134,8 +163,8 @@
     </table>
 </section>
 
-<section class="card">
-    <h3>Кампании и сообщения</h3>
+<section class="card" id="campaigns">
+    <h3>Campaigns and timeline</h3>
     {% for campaign in campaigns %}
     <div class="campaign-block">
         <h4>

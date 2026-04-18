@@ -1,4 +1,11 @@
 {% extends "base.html" %}
+
+{% block page_header %}
+<div class="page-head page-head-plain">
+    <h1>Dashboard</h1>
+</div>
+{% endblock %}
+
 {% block content %}
 {% set status_compact = status_compact | default({
     'new': status_counts.get('new', 0),
@@ -10,183 +17,328 @@
     'smtp': {'ok': health.smtp_ok, 'label': 'online' if health.smtp_ok else 'offline', 'detail': health.mail_error if not health.smtp_ok else None},
     'imap': {'ok': health.imap_ok, 'label': 'online' if health.imap_ok else 'offline', 'detail': health.mail_error if not health.imap_ok else None}
 }) %}
-{% set attention_items = attention_items | default([]) %}
-{% set summaries = summaries | default([]) %}
-{% set recent_tasks = recent_tasks | default([]) %}
-<section class="dashboard-kpi-row">
-    <div class="kpi-grid main-kpi-grid">
-        <article class="card kpi-card {% if company_total == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">Всего компаний</p>
-            <div class="kpi">{{ company_total }}</div>
-            <p class="kpi-note">В базе на текущий момент</p>
-        </article>
-        <article class="card kpi-card {% if status_counts.get('outreaching', 0) == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">В outreach</p>
-            <div class="kpi">{{ status_counts.get('outreaching', 0) }}</div>
-            <p class="kpi-note">Компании в активном цикле</p>
-        </article>
-        <article class="card kpi-card {% if active_campaigns == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">Активные кампании</p>
-            <div class="kpi">{{ active_campaigns }}</div>
-            <p class="kpi-note">Кампании со статусом активна</p>
-        </article>
-        <article class="card kpi-card {% if sent_messages == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">Отправлено писем</p>
-            <div class="kpi">{{ sent_messages }}</div>
-            <p class="kpi-note">Исходящие с sent_at</p>
-        </article>
-        <article class="card kpi-card {% if replies_count == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">Ответы</p>
-            <div class="kpi">{{ replies_count }}</div>
-            <p class="kpi-note">Входящие сообщения</p>
-        </article>
-        <article class="card kpi-card {% if warm_handoffs == 0 %}kpi-zero{% endif %}">
-            <p class="kpi-title">Теплые передачи</p>
-            <div class="kpi">{{ warm_handoffs }}</div>
-            <p class="kpi-note">Нужны действия человека</p>
-        </article>
-    </div>
+{% set dashboard_charts = dashboard_charts | default({}) %}
 
-    <aside class="card compact-status-card">
-        <h3>Статусы компаний</h3>
-        <div class="compact-status-grid">
-            <div class="compact-status-item {% if status_compact.new == 0 %}kpi-zero{% endif %}">
-                <span class="label">Новые</span>
-                <strong>{{ status_compact.new }}</strong>
-            </div>
-            <div class="compact-status-item {% if status_compact.qualified == 0 %}kpi-zero{% endif %}">
-                <span class="label">Квалифицированные</span>
-                <strong>{{ status_compact.qualified }}</strong>
-            </div>
-            <div class="compact-status-item {% if status_compact.rejected == 0 %}kpi-zero{% endif %}">
-                <span class="label">Отклоненные</span>
-                <strong>{{ status_compact.rejected }}</strong>
-            </div>
+{# ── Two-column body ───────────────────────────────────────── #}
+<div class="db-layout">
+
+    {# ── Left main column ─────────────────────────────────── #}
+    <div class="db-main">
+
+        {# KPI row #}
+        <div class="kpi-row-v2">
+            <article class="kpi-v2 kpi-companies">
+                <span class="kpi-accent-dot"></span>
+                <p class="kpi-label">Companies</p>
+                <div class="kpi-num {% if company_total == 0 %}kpi-num-zero{% endif %}">{{ company_total }}</div>
+            </article>
+            <article class="kpi-v2 kpi-contacts">
+                <span class="kpi-accent-dot"></span>
+                <p class="kpi-label">Contacts</p>
+                <div class="kpi-num {% if contact_total == 0 %}kpi-num-zero{% endif %}">{{ contact_total }}</div>
+            </article>
+            <article class="kpi-v2 kpi-campaigns">
+                <span class="kpi-accent-dot"></span>
+                <p class="kpi-label">Campaigns</p>
+                <div class="kpi-num {% if active_campaigns == 0 %}kpi-num-zero{% endif %}">{{ active_campaigns }}</div>
+            </article>
+            <article class="kpi-v2 kpi-replies">
+                <span class="kpi-accent-dot"></span>
+                <p class="kpi-label">Replies</p>
+                <div class="kpi-num {% if replies_count == 0 %}kpi-num-zero{% endif %}">{{ replies_count }}</div>
+            </article>
         </div>
-    </aside>
-</section>
 
-<section class="split-2">
-    <article class="card">
-        <h3>Требует внимания</h3>
-        <ul class="attention-list">
-            {% for item in attention_items %}
-            <li class="attention-item level-{{ item.level }}">
-                <span class="attention-title">{{ item.title }}</span>
-                <strong>{{ item.value }}</strong>
-            </li>
-            {% else %}
-            <li class="attention-item level-success">
-                <span class="attention-title">Критичных задач нет</span>
-                <strong>OK</strong>
-            </li>
-            {% endfor %}
-        </ul>
-    </article>
-
-    <article class="card">
-        <h3>Состояние системы</h3>
-        <div class="service-grid">
-            {% for service, status in system_health.items() %}
-            <div class="service-pill {% if status.ok %}ok{% else %}down{% endif %}">
-                <div class="service-head">
-                    <span>{{ service|upper }}</span>
-                    <span class="dot"></span>
+        {# Scenario cards #}
+        <div class="scenario-grid">
+            <article class="scenario-card scenario-ai">
+                <div class="scenario-icon">AI</div>
+                <div class="scenario-body">
+                    <h4 class="scenario-title">AI Search</h4>
+                    <p class="scenario-desc">Find, filter and qualify companies</p>
+                    <div class="scenario-actions">
+                        <a class="btn-primary" href="/ui/companies">Find companies</a>
+                        <a class="btn-ghost" href="/ui/actions">Deep search</a>
+                    </div>
                 </div>
-                <p>{{ status.label }}</p>
-                {% if status.detail %}
-                <p class="muted small">{{ status.detail }}</p>
-                {% endif %}
-            </div>
-            {% endfor %}
+            </article>
+            <article class="scenario-card scenario-email">
+                <div class="scenario-icon">EM</div>
+                <div class="scenario-body">
+                    <h4 class="scenario-title">Campaigns</h4>
+                    <p class="scenario-desc">Build, review and launch outbound campaigns</p>
+                    <div class="scenario-actions">
+                        <a class="btn-primary" href="/ui/campaigns">Create campaign</a>
+                        <a class="btn-ghost" href="/ui/operations">Operations</a>
+                    </div>
+                </div>
+            </article>
         </div>
-    </article>
-</section>
 
-<section class="card">
-    <h3>Последняя активность</h3>
-    <table class="activity-table">
-        <thead>
-            <tr>
-                <th>Время</th>
-                <th>Тип</th>
-                <th>Сущность</th>
-                <th>Действие</th>
-                <th>Причина</th>
-                <th>Детали</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in recent_activity %}
-            <tr>
-                <td>{{ item.row.created_at }}</td>
-                    <td>
-                        <span class="event-badge {{ item.level }}">
-                            {% if item.level == 'success' %}успех{% elif item.level == 'warning' %}внимание{% elif item.level == 'error' %}ошибка{% else %}инфо{% endif %}
-                        </span>
-                    </td>
-                <td>{{ item.row.entity_type }} #{{ item.row.entity_id or '-' }}</td>
-                <td>{{ item.row.action }}</td>
-                <td>{{ item.row.reason or '-' }}</td>
-                <td>
-                    {% if item.row.details %}
-                    <details class="activity-details">
-                        <summary>Открыть</summary>
-                        <pre>{{ item.details_full }}</pre>
-                    </details>
-                    {% else %}
-                    -
+        <section class="charts-grid">
+            <article class="card chart-card chart-card-wide">
+                <div class="chart-card-head">
+                    <h3>Activity</h3>
+                    <span class="chart-chip">7 days</span>
+                </div>
+                <div class="chart-card-body">
+                    <canvas id="activityChart" class="chart-canvas" {% if not dashboard_charts.activity or (dashboard_charts.activity | sum) == 0 %}hidden{% endif %}></canvas>
+                    {% if not dashboard_charts.activity or (dashboard_charts.activity | sum) == 0 %}
+                    <div class="chart-empty">No activity yet</div>
                     {% endif %}
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="6" class="muted">Пока нет активности.</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</section>
-
-<section class="split-2">
-    <article class="card">
-        <h3>Последние сводки</h3>
-        {% if summaries %}
-        <div class="summary-list">
-            {% for item in summaries %}
-            <div class="summary-row">
-                <div>
-                    <strong>{{ item.title }}</strong>
-                    <p class="muted small">{{ item.row.created_at }}</p>
                 </div>
-                <p class="summary-text">{{ json_excerpt(item.row.details, 240) }}</p>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <p class="muted compact-empty">Сводок пока нет.</p>
-        {% endif %}
-    </article>
+            </article>
 
-    <article class="card">
-        <h3>Фоновые процессы</h3>
-        {% if recent_tasks %}
-        <table class="compact-table">
-            <thead>
-                <tr><th>ID</th><th>Статус</th><th>Создана</th><th>Payload</th></tr>
-            </thead>
-            <tbody>
-                {% for t in recent_tasks %}
-                <tr>
-                    <td>{{ t.id }}</td>
-                    <td>{{ t.status }}</td>
-                    <td>{{ t.created_at }}</td>
-                    <td>{{ json_excerpt(t.payload, 120) }}</td>
-                </tr>
+            <article class="card chart-card">
+                <div class="chart-card-head">
+                    <h3>Pipeline</h3>
+                </div>
+                <div class="chart-card-body chart-card-body-donut">
+                    <canvas id="pipelineChart" class="chart-canvas chart-canvas-donut" {% if not dashboard_charts.pipeline or (dashboard_charts.pipeline | sum) == 0 %}hidden{% endif %}></canvas>
+                    {% if not dashboard_charts.pipeline or (dashboard_charts.pipeline | sum) == 0 %}
+                    <div class="chart-empty">No pipeline data</div>
+                    {% endif %}
+                </div>
+            </article>
+
+            <article class="card chart-card">
+                <div class="chart-card-head">
+                    <h3>Campaigns vs Replies</h3>
+                </div>
+                <div class="chart-card-body">
+                    <canvas id="campaignTrendChart" class="chart-canvas" {% if not dashboard_charts.campaignTrend or ((dashboard_charts.campaignTrend.sent | sum) + (dashboard_charts.campaignTrend.replies | sum)) == 0 %}hidden{% endif %}></canvas>
+                    {% if not dashboard_charts.campaignTrend or ((dashboard_charts.campaignTrend.sent | sum) + (dashboard_charts.campaignTrend.replies | sum)) == 0 %}
+                    <div class="chart-empty">No campaign data yet</div>
+                    {% endif %}
+                </div>
+            </article>
+        </section>
+
+        {# Recent activity table #}
+        <section class="card db-activity-card">
+            <div class="db-section-head">
+                <h3>Activity</h3>
+            </div>
+            <div class="table-scroll">
+            <table class="compact-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Level</th>
+                        <th>Entity</th>
+                        <th>Action</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in recent_activity %}
+                    <tr>
+                        <td class="muted small">{{ item.row.created_at }}</td>
+                        <td><span class="event-badge {{ item.level }}">{{ item.level }}</span></td>
+                        <td>{{ item.row.entity_type }} #{{ item.row.entity_id or '–' }}</td>
+                        <td>{{ item.row.action }}</td>
+                        <td class="muted">{{ item.row.reason or '–' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5">
+                            <div class="db-empty-inline">
+                                <span>No activity yet.</span>
+                                <a href="/ui/companies">Start AI Search →</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+    </div>{# end .db-main #}
+
+    {# ── Right sidebar ────────────────────────────────────── #}
+    <aside class="db-aside">
+
+        {# Usage KPI #}
+        <div class="right-widget">
+            <p class="rw-label">Sent this month</p>
+            <div class="rw-num">{{ sent_messages }}</div>
+        </div>
+
+        {# Company statuses #}
+        <div class="card rw-card">
+            <h4 class="rw-title">Company pipeline</h4>
+            <div class="rw-stat-list">
+                <div class="rw-stat-row">
+                    <span class="rw-dot rw-dot-blue"></span>
+                    <span>New</span>
+                    <strong class="rw-val">{{ status_compact.new }}</strong>
+                </div>
+                <div class="rw-stat-row">
+                    <span class="rw-dot rw-dot-green"></span>
+                    <span>Qualified</span>
+                    <strong class="rw-val">{{ status_compact.qualified }}</strong>
+                </div>
+                <div class="rw-stat-row">
+                    <span class="rw-dot rw-dot-red"></span>
+                    <span>Rejected</span>
+                    <strong class="rw-val">{{ status_compact.rejected }}</strong>
+                </div>
+            </div>
+        </div>
+
+        {# System health #}
+        <div class="card rw-card">
+            <h4 class="rw-title">System health</h4>
+            <div class="rw-health-list">
+                {% for service, status in system_health.items() %}
+                <div class="rw-health-row {% if not status.ok %}rw-health-down{% endif %}">
+                    <span class="rw-health-dot {% if status.ok %}rw-dot-green{% else %}rw-dot-red{% endif %}"></span>
+                    <span class="rw-health-name">{{ service|upper }}</span>
+                    <span class="rw-health-status">{{ status.label }}</span>
+                </div>
+                {% if status.detail %}
+                <p class="rw-health-detail muted small">{{ status.detail }}</p>
+                {% endif %}
                 {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p class="muted compact-empty">Фоновых процессов пока нет.</p>
-        {% endif %}
-    </article>
-</section>
+            </div>
+        </div>
+
+    </aside>
+</div>{# end .db-layout #}
+{% endblock %}
+
+{% block page_scripts %}
+<script id="dashboard-chart-data" type="application/json">{{ dashboard_charts | tojson }}</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    const payload = document.getElementById('dashboard-chart-data');
+    const data = payload ? JSON.parse(payload.textContent || '{}') : null;
+    if (!window.Chart || !data) {
+        return;
+    }
+
+    const gridColor = '#e6ebf2';
+    const tickColor = '#7a8798';
+
+    function baseOptions() {
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: {
+                        boxWidth: 10,
+                        boxHeight: 10,
+                        color: '#42566f',
+                        font: { size: 11 }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#0f1f38',
+                    titleFont: { size: 12 },
+                    bodyFont: { size: 12 },
+                    padding: 10
+                }
+            }
+        };
+    }
+
+    const activityCanvas = document.getElementById('activityChart');
+    if (activityCanvas && data.activity && data.activity.some((value) => value > 0)) {
+        new Chart(activityCanvas, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Events',
+                    data: data.activity,
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                    fill: true,
+                    borderWidth: 2,
+                    tension: 0.35,
+                    pointRadius: 0,
+                    pointHoverRadius: 3
+                }]
+            },
+            options: {
+                ...baseOptions(),
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: tickColor, maxRotation: 0, autoSkip: true, font: { size: 11 } } },
+                    y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: tickColor, precision: 0, font: { size: 11 } } }
+                }
+            }
+        });
+    }
+
+    const pipelineCanvas = document.getElementById('pipelineChart');
+    if (pipelineCanvas && data.pipeline && data.pipeline.some((value) => value > 0)) {
+        new Chart(pipelineCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['New', 'Qualified', 'Rejected'],
+                datasets: [{
+                    data: data.pipeline,
+                    backgroundColor: ['#2563eb', '#16a34a', '#dc2626'],
+                    borderColor: '#ffffff',
+                    borderWidth: 2,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                ...baseOptions(),
+                cutout: '68%',
+                plugins: {
+                    ...baseOptions().plugins,
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 10,
+                            boxHeight: 10,
+                            color: '#42566f',
+                            font: { size: 11 },
+                            padding: 14
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    const trendCanvas = document.getElementById('campaignTrendChart');
+    if (trendCanvas && data.campaignTrend && (data.campaignTrend.sent.some((value) => value > 0) || data.campaignTrend.replies.some((value) => value > 0))) {
+        new Chart(trendCanvas, {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    {
+                        label: 'Sent',
+                        data: data.campaignTrend.sent,
+                        backgroundColor: 'rgba(37, 99, 235, 0.85)',
+                        borderRadius: 6,
+                        maxBarThickness: 18
+                    },
+                    {
+                        label: 'Replies',
+                        data: data.campaignTrend.replies,
+                        backgroundColor: 'rgba(22, 163, 74, 0.85)',
+                        borderRadius: 6,
+                        maxBarThickness: 18
+                    }
+                ]
+            },
+            options: {
+                ...baseOptions(),
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: tickColor, maxRotation: 0, autoSkip: true, font: { size: 11 } } },
+                    y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: tickColor, precision: 0, font: { size: 11 } } }
+                }
+            }
+        });
+    }
+})();
+</script>
 {% endblock %}

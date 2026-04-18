@@ -101,11 +101,16 @@ def send_zone_email(
     subject: str,
     body: str,
     in_reply_to: str | None = None,
+    from_email: str | None = None,
+    dkim_selector: str | None = None,
+    dkim_domain: str | None = None,
+    dkim_private_key_pem: bytes | None = None,
 ) -> str:
-    message_id = make_msgid(domain=settings.zone_email.split("@")[-1])
+    actual_from = from_email or settings.zone_email
+    message_id = make_msgid(domain=actual_from.split("@")[-1])
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = settings.zone_email
+    msg["From"] = actual_from
     msg["To"] = to_email
     msg["Subject"] = subject
     msg["Date"] = format_datetime(datetime.now(timezone.utc))
@@ -117,6 +122,17 @@ def send_zone_email(
     msg.attach(MIMEText(body, "plain", "utf-8"))
     msg.attach(MIMEText(_text_to_html(body), "html", "utf-8"))
 
+    raw_message = msg.as_bytes()
+    if dkim_selector and dkim_domain and dkim_private_key_pem:
+        import dkim  # noqa: PLC0415 — lazy import to avoid hard dependency at module load
+        raw_message = dkim.sign(
+            raw_message,
+            selector=dkim_selector.encode("ascii"),
+            domain=dkim_domain.encode("ascii"),
+            privkey=dkim_private_key_pem,
+            include_headers=[b"from", b"to", b"subject", b"date", b"message-id", b"in-reply-to", b"references"],
+        ) + raw_message
+
     smtp = smtplib.SMTP(settings.zone_smtp_host, settings.zone_smtp_port, timeout=20)
     try:
         smtp.ehlo()
@@ -124,7 +140,7 @@ def send_zone_email(
             smtp.starttls()
             smtp.ehlo()
         smtp.login(settings.zone_email, settings.zone_password)
-        smtp.send_message(msg)
+        smtp.sendmail(actual_from, [to_email], raw_message)
     finally:
         smtp.quit()
 

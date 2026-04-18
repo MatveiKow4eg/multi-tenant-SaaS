@@ -1,57 +1,94 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui %}
 {% block content %}
+{% set stats = namespace(running=0, replied=0) %}
+{% for campaign, company, contact in rows %}
+    {% if campaign.status == 'active' %}
+        {% set stats.running = stats.running + 1 %}
+    {% endif %}
+    {% if campaign.has_reply %}
+        {% set stats.replied = stats.replied + 1 %}
+    {% endif %}
+{% endfor %}
+
 <section class="card">
-    <h3>Фильтры</h3>
+    <h3>Campaign creation flow</h3>
+    <div class="prep-status-grid">
+        <div class="prep-step done"><span>Шаг 1</span><strong>Источник аудитории</strong></div>
+        <div class="prep-step done"><span>Шаг 2</span><strong>Проверка базы</strong></div>
+        <div class="prep-step pending"><span>Шаг 3</span><strong>Шаблон письма</strong></div>
+        <div class="prep-step pending"><span>Шаг 4</span><strong>Review и запуск</strong></div>
+    </div>
+    <p class="muted small top-gap">Recommended flow: Prepare first, then confirm Send separately.</p>
+</section>
+
+<section class="card">
+    <h3>Filters</h3>
     <form method="get" class="filters-grid">
-        <label>Статус
+        <label>Status
             <select name="status">
-                <option value="">Любой</option>
+                <option value="">Any</option>
                 {% for s in statuses %}<option value="{{ s }}" {% if filters.status==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
             </select>
         </label>
-        <label>Язык
+        <label>Language
             <select name="language">
-                <option value="">Любой</option>
+                <option value="">Any</option>
                 {% for l in languages %}<option value="{{ l }}" {% if filters.language==l %}selected{% endif %}>{{ l }}</option>{% endfor %}
             </select>
         </label>
-        <label>Есть ответ
+        <label>Has reply
             <select name="has_reply">
-                <option value="">Любой</option>
-                <option value="true" {% if filters.has_reply=='true' %}selected{% endif %}>Да</option>
-                <option value="false" {% if filters.has_reply=='false' %}selected{% endif %}>Нет</option>
+                <option value="">Any</option>
+                <option value="true" {% if filters.has_reply=='true' %}selected{% endif %}>Yes</option>
+                <option value="false" {% if filters.has_reply=='false' %}selected{% endif %}>No</option>
             </select>
         </label>
-        <div class="filters-actions"><button type="submit">Применить</button><a class="btn-link" href="/ui/campaigns">Сбросить</a></div>
+        <div class="filters-actions"><button type="submit">Apply</button><a class="btn-link" href="/ui/campaigns">Reset</a></div>
     </form>
 </section>
 
 <section class="card">
-    <h3>Кампании</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill">
+            <span>Total campaigns</span>
+            <strong>{{ rows | length }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Running</span>
+            <strong>{{ stats.running }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>With replies</span>
+            <strong>{{ stats.replied }}</strong>
+        </div>
+    </div>
+    <h3>Campaigns</h3>
     <table>
-        <thead><tr><th>ID</th><th>Компания</th><th>Контакт</th><th>Язык</th><th>Статус</th><th>Шаг</th><th>Есть ответ</th><th>Создана</th><th>Обновлена</th><th>Действия</th></tr></thead>
+        <thead><tr><th>ID</th><th>Company</th><th>Contact</th><th>Lang</th><th>Status</th><th>Step</th><th>Reply</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead>
         <tbody>
             {% for campaign, company, contact in rows %}
+            {% set campaign_status = (campaign.status|string).lower().replace('campaignstatus.', '') %}
             <tr>
                 <td>{{ campaign.id }}</td>
                 <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
                 <td>{{ contact.email if contact else '-' }}</td>
-                <td>{{ campaign.language or '-' }}</td>
-                <td>{{ campaign.status }}</td>
+                <td>{{ ui.lang_chip(campaign.language or '-') }}</td>
+                <td>{{ ui.status_chip(campaign_status, campaign.status) }}</td>
                 <td>{{ campaign.step }}</td>
-                <td>{{ campaign.has_reply }}</td>
+                <td>{{ ui.bool_chip(campaign.has_reply, 'yes', 'no') }}</td>
                 <td>{{ campaign.created_at }}</td>
                 <td>{{ campaign.updated_at }}</td>
                 <td>
                     <div class="row-actions">
-                        <a href="/ui/campaigns/{{ campaign.id }}">Детали</a>
-                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Отправить сейчас</button></form>
-                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Остановить</button></form>
-                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied"><button type="submit">Отметить как replied</button></form>
+                        <a href="/ui/campaigns/{{ campaign.id }}">Details</a>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Send now</button></form>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Pause</button></form>
+                        <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied"><button type="submit">Mark replied</button></form>
                     </div>
                 </td>
             </tr>
-            {% else %}<tr><td colspan="10" class="muted">Кампаний нет.</td></tr>{% endfor %}
+            {% else %}<tr><td colspan="10" class="muted">No campaigns found.</td></tr>{% endfor %}
         </tbody>
     </table>
 </section>

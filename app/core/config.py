@@ -55,6 +55,39 @@ class Settings(BaseSettings):
     search_provider_fallback_to_ddg: bool = Field(default=False, alias="SEARCH_PROVIDER_FALLBACK_TO_DDG")
 
     outreach_allowed_countries: str = Field(default="Lithuania", alias="OUTREACH_ALLOWED_COUNTRIES")
+    outreach_min_qualification_score: float = Field(
+        default=60.0,
+        alias="OUTREACH_MIN_QUALIFICATION_SCORE",
+    )
+    outreach_max_bounce_rate: float = Field(
+        default=0.10,
+        alias="OUTREACH_MAX_BOUNCE_RATE",
+    )
+    outreach_bounce_min_sent: int = Field(
+        default=5,
+        alias="OUTREACH_BOUNCE_MIN_SENT",
+    )
+
+    # DNS Wizard / Sender Domains
+    # Fernet-compatible: any string → SHA-256 → 32 bytes → urlsafe_b64encode
+    dkim_secret_key: str = Field(
+        default="change-me-in-production-32bytes!",
+        alias="DKIM_SECRET_KEY",
+    )
+    sender_domain_default_dkim_mode: str = Field(
+        default="cname",
+        alias="SENDER_DOMAIN_DEFAULT_DKIM_MODE",
+    )
+    dkim_managed_domain: str = Field(
+        default="dkim.lertisento.com",
+        alias="DKIM_MANAGED_DOMAIN",
+    )
+    sender_default_local_part: str = Field(
+        default="hello",
+        alias="SENDER_DEFAULT_LOCAL_PART",
+    )
+    spf_include_domain: str = Field(default="zonemx.eu", alias="SPF_INCLUDE_DOMAIN")
+    dmarc_rua_email: str = Field(default="dmarc@lertisento.com", alias="DMARC_RUA_EMAIL")
 
 
 settings = Settings()

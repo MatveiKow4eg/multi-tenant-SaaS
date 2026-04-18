@@ -1,23 +1,115 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui %}
 {% block content %}
 <section class="card">
-    <h3>Ответы</h3>
-    <table>
-        <thead><tr><th>Классификация</th><th>Summary</th><th>Нужен человек</th><th>Компания</th><th>Контакт</th><th>Кампания</th><th>Получено</th><th>Превью сырого тела</th></tr></thead>
-        <tbody>
+    <h3>Inbox / Replies</h3>
+    <p class="muted">Prioritize replies that need action and process them with campaign context in one workspace.</p>
+
+    <div class="quick-chips-row">
+        <a class="quick-chip {% if filters.queue == 'new' %}active{% endif %}" href="/ui/replies?queue=new">New</a>
+        <a class="quick-chip {% if filters.queue == 'positive' %}active{% endif %}" href="/ui/replies?queue=positive">Positive</a>
+        <a class="quick-chip {% if filters.queue == 'neutral' %}active{% endif %}" href="/ui/replies?queue=neutral">Neutral</a>
+        <a class="quick-chip {% if filters.queue == 'objection' %}active{% endif %}" href="/ui/replies?queue=objection">Objection</a>
+        <a class="quick-chip {% if filters.queue == 'auto-reply' %}active{% endif %}" href="/ui/replies?queue=auto-reply">Auto-reply</a>
+        <a class="quick-chip {% if filters.queue == 'unsubscribe' %}active{% endif %}" href="/ui/replies?queue=unsubscribe">Unsubscribe</a>
+        <a class="quick-chip {% if filters.queue == 'spam-risk' %}active{% endif %}" href="/ui/replies?queue=spam-risk">Spam-risk</a>
+        <a class="quick-chip {% if filters.queue == 'closed' %}active{% endif %}" href="/ui/replies?queue=closed">Closed</a>
+    </div>
+
+    <form method="get" class="filters-grid top-gap">
+        <label>Queue
+            <select name="queue">
+                <option value="">Any</option>
+                {% for q in ['new','positive','neutral','objection','auto-reply','unsubscribe','spam-risk','closed'] %}
+                <option value="{{ q }}" {% if filters.queue == q %}selected{% endif %}>{{ q }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Needs human
+            <select name="needs_human">
+                <option value="">Any</option>
+                <option value="true" {% if filters.needs_human == 'true' %}selected{% endif %}>Yes</option>
+                <option value="false" {% if filters.needs_human == 'false' %}selected{% endif %}>No</option>
+            </select>
+        </label>
+        <label>Company
+            <input type="text" name="company_q" value="{{ filters.company_q }}" placeholder="Domain or company" />
+        </label>
+        <label>Country
+            <select name="country">
+                <option value="">Any</option>
+                {% for c in countries %}<option value="{{ c }}" {% if filters.country == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+        </label>
+        <div class="filters-actions">
+            <button type="submit">Apply</button>
+            <a class="btn-link" href="/ui/replies">Reset</a>
+        </div>
+    </form>
+
+    {% if rows %}
+    <div class="inbox-grid">
+        <aside class="inbox-col threads-col">
+            <h4>Threads</h4>
+            <div class="thread-list">
+                {% for reply, message, campaign, company, contact in rows %}
+                <a class="thread-item {% if loop.first %}active{% endif %}" href="#reply-{{ reply.id }}">
+                    <div class="thread-top">
+                        {{ ui.severity_badge('info', reply.label or 'new') }}
+                        <span class="muted small">{{ message.received_at or reply.created_at }}</span>
+                    </div>
+                    <strong>{{ company.name or company.domain }}</strong>
+                    <p>{{ reply.summary or 'Без summary' }}</p>
+                </a>
+                {% endfor %}
+            </div>
+        </aside>
+
+        <section class="inbox-col conversation-col">
+            <h4>Conversation</h4>
             {% for reply, message, campaign, company, contact in rows %}
-            <tr>
-                <td>{{ reply.label or '-' }}</td>
-                <td>{{ reply.summary or '-' }}</td>
-                <td>{{ reply.needs_human }}</td>
-                <td><a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></td>
-                <td>{{ contact.email if contact else '-' }}</td>
-                <td><a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a></td>
-                <td>{{ message.received_at or reply.created_at }}</td>
-                <td>{{ (message.body or '')[:180] }}{% if message.body and message.body|length > 180 %}...{% endif %}</td>
-            </tr>
-            {% else %}<tr><td colspan="8" class="muted">Ответов пока нет.</td></tr>{% endfor %}
-        </tbody>
-    </table>
+            <article id="reply-{{ reply.id }}" class="conversation-item">
+                <div class="conversation-head">
+                    <strong>{{ message.subject or 'Без темы' }}</strong>
+                    <span class="muted small">Campaign #{{ campaign.id }}</span>
+                </div>
+                <div class="bubble bubble-out">
+                    <p class="muted small">Outbound message</p>
+                    <pre>{{ message.body or '-' }}</pre>
+                </div>
+                <div class="bubble bubble-in">
+                    <p class="muted small">Client reply</p>
+                    <p>{{ reply.summary or 'Summary отсутствует' }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </section>
+
+        <aside class="inbox-col context-col">
+            <h4>Context & actions</h4>
+            {% for reply, message, campaign, company, contact in rows %}
+            <article class="context-item">
+                <p><strong>Company:</strong> <a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></p>
+                <p><strong>Contact:</strong> {{ contact.email if contact else '-' }}</p>
+                <p><strong>Campaign:</strong> <a href="/ui/campaigns/{{ campaign.id }}">#{{ campaign.id }}</a></p>
+                <p><strong>Category:</strong> {{ reply.label or '-' }}</p>
+                <p><strong>Needs human:</strong> {{ reply.needs_human }}</p>
+                <div class="row-actions top-gap">
+                    <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied" class="inline-form">
+                        <button type="submit">Mark reviewed</button>
+                    </form>
+                    {% if campaign.status == 'active' and not campaign.has_reply %}
+                    <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now" class="inline-form">
+                        <button type="submit">Send follow-up</button>
+                    </form>
+                    {% endif %}
+                </div>
+            </article>
+            {% endfor %}
+        </aside>
+    </div>
+    {% else %}
+    <p class="muted">No replies found for current filters. Run campaigns and check reply ingest in Operations.</p>
+    {% endif %}
 </section>
 {% endblock %}

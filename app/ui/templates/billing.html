@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Billing and usage</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill"><span>Plan</span><strong>Workspace plan</strong></div>
+        <div class="summary-pill"><span>Outbound sent</span><strong>{{ usage_sent }}</strong></div>
+        <div class="summary-pill"><span>Companies in DB</span><strong>{{ usage_companies }}</strong></div>
+        <div class="summary-pill"><span>Credits</span><strong>n/a</strong></div>
+    </div>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Billing cycle</h3>
+        <ul class="plain-list">
+            <li>Current cycle: monthly</li>
+            <li>Invoice status: manual mode</li>
+            <li>Overage alerts: not configured</li>
+        </ul>
+    </article>
+    <article class="card">
+        <h3>Recommendations</h3>
+        <ul class="plain-list">
+            <li>Настройте лимиты отправки перед масштабом.</li>
+            <li>Следите за reply rate и bounce рисками в Analytics.</li>
+            <li>Проверяйте доменные настройки перед массовыми рассылками.</li>
+        </ul>
+    </article>
+</section>
+{% endblock %}

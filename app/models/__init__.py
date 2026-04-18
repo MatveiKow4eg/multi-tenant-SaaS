@@ -15,6 +15,7 @@ from app.models.tenant_membership import TenantMembership
 from app.models.user_session import UserSession
 from app.models.tenant_invite import TenantInvite
 from app.models.email_token import EmailToken
+from app.models.sender_domain import DkimKeyPair, ManagedDkimSelector, SenderDomain, SenderDomainDnsRecord
 
 __all__ = [
     "Task",
@@ -34,4 +35,8 @@ __all__ = [
     "UserSession",
     "TenantInvite",
     "EmailToken",
+    "SenderDomain",
+    "SenderDomainDnsRecord",
+    "DkimKeyPair",
+    "ManagedDkimSelector",
 ]

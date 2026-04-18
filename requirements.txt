@@ -11,3 +11,6 @@ redis==5.2.1
 playwright==1.52.0
 openai==1.82.0
 httpx==0.28.1
+dnspython==2.7.0
+cryptography>=42.0.0
+dkimpy>=1.1.8

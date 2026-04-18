@@ -26,8 +26,9 @@ def _build_test_session():
     return Session()
 
 
-def _seed(db):
+def _seed(db, tenant_id: int):
     company = Company(
+        tenant_id=tenant_id,
         domain="example.lt",
         name="Example LT",
         country="Lithuania",
@@ -86,7 +87,6 @@ def _seed(db):
 
 def test_ui_smoke_pages(monkeypatch):
     db = _build_test_session()
-    _seed(db)
 
     def _override_db():
         try:
@@ -104,6 +104,21 @@ def test_ui_smoke_pages(monkeypatch):
     client = TestClient(app)
 
     try:
+        reg_owner = client.post(
+            "/api/auth/register",
+            json={
+                "email": "owner@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Alpha Team",
+            },
+        )
+        assert reg_owner.status_code == 200
+        auth_token = reg_owner.json()["token"]
+        tenant_id = reg_owner.json()["tenant_id"]
+        client.cookies.set("auth_session", auth_token)
+
+        _seed(db, tenant_id)
+
         response_dashboard = client.get("/ui")
         response_companies = client.get("/ui/companies")
         response_company = client.get("/ui/companies/1")
@@ -118,6 +133,52 @@ def test_ui_smoke_pages(monkeypatch):
         assert response_messages.status_code == 200
         assert response_operations.status_code == 200
         assert "ui_auth_login_failed" in response_operations.text
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_ui_static_css_is_public_without_auth():
+    client = TestClient(app)
+
+    response = client.get("/ui-static/style.css", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "text/css" in response.headers.get("content-type", "")
+
+
+def test_new_tenant_is_redirected_to_onboarding_until_setup():
+    db = _build_test_session()
+
+    def _override_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = _override_db
+    client = TestClient(app)
+
+    try:
+        reg_owner = client.post(
+            "/api/auth/register",
+            json={
+                "email": "fresh-owner@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Fresh Team",
+            },
+        )
+        assert reg_owner.status_code == 200
+
+        token = reg_owner.json()["token"]
+        client.cookies.set("auth_session", token)
+
+        blocked = client.get("/ui/companies", follow_redirects=False)
+        assert blocked.status_code in (302, 303)
+        assert blocked.headers.get("location") == "/ui/onboarding/start"
+
+        onboarding = client.get("/ui/onboarding/start", follow_redirects=False)
+        assert onboarding.status_code == 200
     finally:
         app.dependency_overrides.clear()
         db.close()

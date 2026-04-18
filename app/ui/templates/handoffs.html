@@ -1,34 +1,64 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui %}
 {% block content %}
+{% set stats = namespace(urgent=0, new_items=0, in_review=0) %}
+{% for handoff, campaign, company, contact in rows %}
+    {% if handoff.priority and handoff.priority|lower in ['high', 'critical', 'urgent'] %}
+        {% set stats.urgent = stats.urgent + 1 %}
+    {% endif %}
+    {% if handoff.status == 'new' %}
+        {% set stats.new_items = stats.new_items + 1 %}
+    {% elif handoff.status == 'in_review' %}
+        {% set stats.in_review = stats.in_review + 1 %}
+    {% endif %}
+{% endfor %}
+
 <section class="card">
-    <h3>Передачи (warm leads)</h3>
+    <h3>Handoffs (warm leads)</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill {% if stats.urgent > 0 %}summary-pill-risk{% endif %}"><span>Urgent</span><strong>{{ stats.urgent }}</strong></div>
+        <div class="summary-pill"><span>New</span><strong>{{ stats.new_items }}</strong></div>
+        <div class="summary-pill"><span>In review</span><strong>{{ stats.in_review }}</strong></div>
+    </div>
+
+    {{ ui.alert_banner('warning', 'Needs attention', 'Process high/critical handoffs first and close with status done after action.') }}
+
     <table>
-        <thead><tr><th>ID</th><th>Label</th><th>Приоритет</th><th>Нужен человек</th><th>Компания</th><th>Контакт</th><th>Кампания</th><th>Рекомендованное следующее действие</th><th>Причина/Summary</th><th>Статус</th><th>Создано</th></tr></thead>
+        <thead><tr><th>ID</th><th>Label</th><th>Priority</th><th>Needs human</th><th>Company</th><th>Contact</th><th>Campaign</th><th>Recommended action</th><th>Summary</th><th>Status</th><th>Created</th></tr></thead>
         <tbody>
             {% for handoff, campaign, company, contact in rows %}
             <tr>
                 <td>{{ handoff.id }}</td>
                 <td>{{ handoff.label }}</td>
-                <td>{{ handoff.priority }}</td>
-                <td>{{ handoff.needs_human }}</td>
+                <td>
+                    {% if handoff.priority and handoff.priority|lower in ['high', 'critical', 'urgent'] %}
+                        {{ ui.severity_badge('error', handoff.priority) }}
+                    {% elif handoff.priority and handoff.priority|lower in ['medium'] %}
+                        {{ ui.severity_badge('warning', handoff.priority) }}
+                    {% else %}
+                        {{ ui.severity_badge('info', handoff.priority or 'low') }}
+                    {% endif %}
+                </td>
+                <td>{{ ui.bool_chip(handoff.needs_human, 'yes', 'no') }}</td>
                 <td>{% if company %}<a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a>{% else %}-{% endif %}</td>
                 <td>{{ contact.email if contact else '-' }}</td>
                 <td>{% if campaign %}<a href="/ui/campaigns/{{ campaign.id }}">{{ campaign.id }}</a>{% else %}-{% endif %}</td>
                 <td>{{ handoff.recommended_reply or '-' }}</td>
                 <td>{{ handoff.summary or '-' }}</td>
                 <td>
+                    {{ ui.status_chip((handoff.status or 'new')|lower, handoff.status or 'new') }}
                     <form method="post" action="/ui/handoffs/{{ handoff.id }}/status" class="inline-form">
                         <select name="status">
                             <option value="new" {% if handoff.status=='new' %}selected{% endif %}>new</option>
                             <option value="in_review" {% if handoff.status=='in_review' %}selected{% endif %}>in_review</option>
                             <option value="done" {% if handoff.status=='done' %}selected{% endif %}>done</option>
                         </select>
-                        <button type="submit">Сохранить</button>
+                        <button type="submit">Save</button>
                     </form>
                 </td>
                 <td>{{ handoff.created_at }}</td>
             </tr>
-            {% else %}<tr><td colspan="11" class="muted">Передач нет.</td></tr>{% endfor %}
+            {% else %}<tr><td colspan="11" class="muted">No handoffs found.</td></tr>{% endfor %}
         </tbody>
     </table>
 </section>

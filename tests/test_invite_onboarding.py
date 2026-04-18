@@ -96,17 +96,8 @@ def test_invite_create_and_accept_flow():
         db.close()
 
 
-def test_ui_team_invite_sends_email_and_accept_page(monkeypatch):
+def test_ui_team_invite_is_disabled_and_accept_page_works(monkeypatch):
     db = _build_test_session()
-
-    sent: dict[str, str] = {}
-
-    def _fake_send_invite_email(*, to_email: str, invite_url: str, tenant_name: str, role: str):
-        sent["to_email"] = to_email
-        sent["invite_url"] = invite_url
-        sent["tenant_name"] = tenant_name
-        sent["role"] = role
-        return "message-id-1"
 
     def _override_db():
         try:
@@ -114,7 +105,6 @@ def test_ui_team_invite_sends_email_and_accept_page(monkeypatch):
         finally:
             pass
 
-    monkeypatch.setattr("app.ui.routes.send_invite_email", _fake_send_invite_email)
     app.dependency_overrides[get_db] = _override_db
     client = TestClient(app)
 
@@ -140,10 +130,7 @@ def test_ui_team_invite_sends_email_and_accept_page(monkeypatch):
             headers={"Authorization": f"Bearer {owner_token}"},
             follow_redirects=False,
         )
-        assert invite_ui.status_code == 303
-        assert sent["to_email"] == "invitee@example.com"
-        assert sent["role"] == "operator"
-        assert "/ui/accept-invite?token=" in sent["invite_url"]
+        assert invite_ui.status_code == 404
 
         accept_page = client.get("/ui/accept-invite")
         assert accept_page.status_code == 200

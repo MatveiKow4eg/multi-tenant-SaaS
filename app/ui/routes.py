@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, time, timedelta
 from pathlib import Path
 import re
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from redis import Redis
@@ -26,13 +27,26 @@ from app.models.message import Message, MessageDirection
 from app.models.reply import Reply
 from app.models.schedule import Schedule
 from app.models.task import Task
+from app.models.tenant import Tenant
 from app.models.tenant_membership import MembershipRole, TenantMembership
 from app.models.tenant_invite import TenantInvite
 from app.models.user import User
+from app.models.sender_domain import ManagedDkimSelector, SenderDomain
+from app.services.sender_domains import (
+    authentication_status,
+    create_sender_domain_profile,
+    ensure_ownership_token,
+    mark_sender_domain_ownership_email_verified,
+    normalize_domain,
+    rotate_dkim,
+    verify_sender_domain,
+    verify_sender_domain_ownership_dns,
+)
 from app.services.auth.security import hash_password, verify_password
 from app.services.auth.email_tokens import create_email_token, consume_email_token
 from app.services.auth.rate_limit import acquire_email_cooldown, clear_login_failures, is_login_allowed, register_login_failure
 from app.services.mail.auth_emails import send_verification_email, send_password_reset_email
+from app.services.mail.ownership_emails import send_domain_ownership_verification_email
 from app.services.auth.invites import create_invite
 from app.services.auth.session_manager import resolve_active_session, revoke_session
 from app.api.routes.auth import accept_invite as api_accept_invite
@@ -91,6 +105,58 @@ def _trim(value: str | None) -> str | None:
     return value or None
 
 
+def _extract_domain_from_website(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    candidate = raw
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return None
+
+    host = (parsed.hostname or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return None
+
+    try:
+        return normalize_domain(host)
+    except Exception:
+        return None
+
+
+def _resolve_request_user(request: Request, db: Session, tenant_id: int | None) -> User | None:
+    token = request.cookies.get(settings.auth_session_cookie_name)
+    if not token:
+        return None
+    session = resolve_active_session(db, token)
+    if session is None:
+        return None
+    if tenant_id is not None and session.tenant_id != tenant_id:
+        return None
+    return db.query(User).filter(User.id == session.user_id).first()
+
+
+def _extract_email_domain(value: str | None) -> str | None:
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    match = re.fullmatch(r"[^@\s]+@([^@\s]+)", candidate)
+    if not match:
+        return None
+    return (match.group(1) or "").strip().lower()
+
+
 def _json_excerpt(payload: dict | None, limit: int = 160) -> str:
     if not payload:
         return "-"
@@ -117,10 +183,18 @@ def _event_level(action: str) -> str:
 def _nav_key(path: str) -> str:
     if path == "/ui" or path == "/ui/":
         return "dashboard"
+    if path.startswith("/ui/lists"):
+        return "lists"
     if path.startswith("/ui/companies"):
         return "companies"
     if path.startswith("/ui/campaigns"):
         return "campaigns"
+    if path.startswith("/ui/analytics"):
+        return "analytics"
+    if path.startswith("/ui/settings"):
+        return "settings"
+    if path.startswith("/ui/billing"):
+        return "billing"
     if path.startswith("/ui/messages"):
         return "messages"
     if path.startswith("/ui/replies"):
@@ -133,9 +207,13 @@ def _nav_key(path: str) -> str:
         return "handoffs"
     if path.startswith("/ui/actions"):
         return "actions"
-    if path.startswith("/ui/team"):
-        return "team"
+    if path.startswith("/ui/domains"):
+        return "domains"
     return ""
+
+
+def _raise_team_ui_disabled() -> None:
+    raise HTTPException(status_code=404, detail="team_ui_disabled")
 
 
 def _service_status(ok: bool, detail: str | None = None) -> dict[str, str | bool | None]:
@@ -192,6 +270,25 @@ def _format_compact_dt(value: datetime | None) -> str:
         12: "дек",
     }
     return f"{dt.day:02d} {month_map.get(dt.month, dt.month)} {dt.strftime('%H:%M')}"
+
+
+def _last_n_day_labels(days: int) -> list[str]:
+    today = datetime.utcnow().date()
+    return [
+        (today - timedelta(days=offset)).strftime("%d %b")
+        for offset in range(days - 1, -1, -1)
+    ]
+
+
+def _bucket_datetimes_by_day(values: list[datetime | None], days: int) -> list[int]:
+    today = datetime.utcnow().date()
+    start_day = today - timedelta(days=days - 1)
+    counts = Counter(
+        value.date()
+        for value in values
+        if value is not None and value.date() >= start_day
+    )
+    return [counts.get(start_day + timedelta(days=index), 0) for index in range(days)]
 
 
 def _get_system_health(db: Session, smtp_ok: bool, imap_ok: bool, mail_error: str | None) -> dict[str, dict]:
@@ -455,6 +552,7 @@ def _flash_redirect(url: str, message: str | None = None, error: str | None = No
 
 
 def _base_context(request: Request, page_title: str) -> dict:
+    tenant_hint = request.headers.get("X-Tenant-Id") or request.query_params.get("tenant_id") or "global"
     return {
         "request": request,
         "page_title": page_title,
@@ -462,6 +560,8 @@ def _base_context(request: Request, page_title: str) -> dict:
         "flash_error": request.query_params.get("err"),
         "now": datetime.utcnow(),
         "active_nav": _nav_key(request.url.path),
+        "tenant_hint": tenant_hint,
+        "workspace_label": f"tenant:{tenant_hint}",
         "csrf_cookie_name": settings.auth_csrf_cookie_name,
     }
 
@@ -471,16 +571,21 @@ def _audit_auth_event(
     *,
     action: str,
     user_id: int | None = None,
+    tenant_id: int | None = None,
     reason: str | None = None,
     details: dict | None = None,
 ) -> None:
     try:
+        payload = dict(details or {})
+        if tenant_id is not None:
+            payload.setdefault("tenant_id", tenant_id)
         db.add(
             AuditLog(
                 entity_type="auth",
                 entity_id=user_id,
+                tenant_id=tenant_id,
                 action=action,
-                details=details,
+                details=payload or None,
                 reason=reason,
             )
         )
@@ -500,7 +605,7 @@ def ui_logout(request: Request, db: Session = Depends(get_db)) -> RedirectRespon
                 db,
                 action="ui_auth_logout",
                 user_id=session.user_id,
-                details={"tenant_id": session.tenant_id},
+                tenant_id=session.tenant_id,
             )
 
     response = _flash_redirect("/ui", message="Вы вышли из системы")
@@ -538,37 +643,92 @@ def _handoff_query(db: Session, tenant_id: int | None):
     return q
 
 
+def _contact_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(Contact).join(Company, Company.id == Contact.company_id)
+    if legacy_global:
+        q = q.filter(Company.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(Company.tenant_id == tenant_id)
+    return q
+
+
+def _dashboard_company_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(Company)
+    if legacy_global:
+        q = q.filter(Company.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(Company.tenant_id == tenant_id)
+    return q
+
+
+def _dashboard_campaign_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(Campaign).join(Company, Company.id == Campaign.company_id)
+    if legacy_global:
+        q = q.filter(Company.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(Company.tenant_id == tenant_id)
+    return q
+
+
+def _dashboard_message_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(Message).join(Campaign, Campaign.id == Message.campaign_id).join(Company, Company.id == Campaign.company_id)
+    if legacy_global:
+        q = q.filter(Company.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(Company.tenant_id == tenant_id)
+    return q
+
+
+def _dashboard_handoff_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(Handoff).join(Company, Company.id == Handoff.company_id)
+    if legacy_global:
+        q = q.filter(Company.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(Company.tenant_id == tenant_id)
+    return q
+
+
+def _dashboard_audit_query(db: Session, tenant_id: int | None, legacy_global: bool = False):
+    q = db.query(AuditLog)
+    if legacy_global:
+        q = q.filter(AuditLog.tenant_id.is_(None))
+    elif tenant_id is not None:
+        q = q.filter(AuditLog.tenant_id == tenant_id)
+    return q
+
+
 @router.get("", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    companies_q = _company_query(db, tenant_id)
+    legacy_global_scope = False
+    companies_q = _dashboard_company_query(db, tenant_id)
     status_counts_rows = companies_q.with_entities(Company.status, func.count(Company.id)).group_by(Company.status).all()
-    status_counts = {str(status): count for status, count in status_counts_rows}
+    status_counts = {_normalize_status(status): count for status, count in status_counts_rows}
 
     company_total = companies_q.count()
+    contact_total = _contact_query(db, tenant_id).count()
     active_campaigns = (
-        _campaign_query(db, tenant_id)
+        _dashboard_campaign_query(db, tenant_id)
         .filter(Campaign.status == CampaignStatus.active)
         .count()
     )
-    message_q = db.query(Message).join(Campaign, Campaign.id == Message.campaign_id).join(Company, Company.id == Campaign.company_id)
-    if tenant_id is not None:
-        message_q = message_q.filter(Company.tenant_id == tenant_id)
+    message_q = _dashboard_message_query(db, tenant_id)
     sent_messages = (
         message_q.filter(Message.direction == MessageDirection.outbound, Message.sent_at.isnot(None)).count()
     )
     replies_count = (
         message_q.filter(Message.direction == MessageDirection.inbound).count()
     )
-    handoff_q = _handoff_query(db, tenant_id)
+    handoff_q = _dashboard_handoff_query(db, tenant_id)
     warm_handoffs = (
         handoff_q.filter(Handoff.needs_human.is_(True)).count()
     )
 
-    recent_activity = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(25).all()
+    audit_q = _dashboard_audit_query(db, tenant_id)
+    recent_activity = audit_q.order_by(AuditLog.created_at.desc()).limit(25).all()
 
     smtp_ok = False
     imap_ok = False
@@ -644,6 +804,37 @@ def dashboard(
 
     recent_tasks = db.query(Task).order_by(Task.created_at.desc()).limit(8).all()
 
+    chart_days = 7
+    activity_points = [row.created_at for row in audit_q.filter(AuditLog.created_at.isnot(None)).all()]
+    sent_points = [
+        row[0]
+        for row in message_q
+        .filter(Message.direction == MessageDirection.outbound, Message.sent_at.isnot(None))
+        .with_entities(Message.sent_at)
+        .all()
+    ]
+    reply_points = [
+        row[0]
+        for row in message_q
+        .filter(Message.direction == MessageDirection.inbound)
+        .with_entities(func.coalesce(Message.received_at, Message.created_at))
+        .all()
+    ]
+    chart_labels = _last_n_day_labels(chart_days)
+    dashboard_charts = {
+        "labels": chart_labels,
+        "activity": _bucket_datetimes_by_day(activity_points, chart_days),
+        "pipeline": [
+            status_counts.get("new", 0),
+            status_counts.get("qualified", 0),
+            status_counts.get("rejected", 0),
+        ],
+        "campaignTrend": {
+            "sent": _bucket_datetimes_by_day(sent_points, chart_days),
+            "replies": _bucket_datetimes_by_day(reply_points, chart_days),
+        },
+    }
+
     activity_rows = [
         {
             "row": row,
@@ -654,8 +845,9 @@ def dashboard(
     ]
 
     context = {
-        **_base_context(request, "Панель"),
+        **_base_context(request, "Dashboard"),
         "company_total": company_total,
+        "contact_total": contact_total,
         "status_counts": status_counts,
         "active_campaigns": active_campaigns,
         "sent_messages": sent_messages,
@@ -680,6 +872,8 @@ def dashboard(
         "last_reply_ingest_summary": last_reply_ingest_summary,
         "summaries": summaries_non_empty,
         "recent_tasks": recent_tasks,
+        "dashboard_charts": dashboard_charts,
+        "dashboard_uses_legacy_global": legacy_global_scope,
         "json_excerpt": _json_excerpt,
     }
     return templates.TemplateResponse(request, "dashboard.html", context)
@@ -1017,6 +1211,7 @@ def company_action_prepare(
             AuditLog(
                 entity_type="company",
                 entity_id=company.id,
+                tenant_id=company.tenant_id,
                 action="site_researched",
                 details={
                     "pages_found": len(research_result.pages),
@@ -1055,6 +1250,7 @@ def company_action_prepare(
             AuditLog(
                 entity_type="company",
                 entity_id=company.id,
+                tenant_id=company.tenant_id,
                 action="company_qualified",
                 details={**qualification, "source": "ui_prepare_pipeline"},
                 reason="Qualification выполнен из кнопки 'Подготовить компанию'.",
@@ -1072,6 +1268,7 @@ def company_action_prepare(
             AuditLog(
                 entity_type="company",
                 entity_id=company.id,
+                tenant_id=company.tenant_id,
                 action="contacts_resolved",
                 details={"created": len(created), "source": "ui_prepare_pipeline"},
                 reason="Контакты найдены из кнопки 'Подготовить компанию'.",
@@ -1100,6 +1297,7 @@ def company_action_prepare(
                     AuditLog(
                         entity_type="company",
                         entity_id=company.id,
+                        tenant_id=company.tenant_id,
                         action="ui_outreach_draft_skipped",
                         details={"reason": skip_reason},
                         reason="Draft outreach пропущен из-за blacklist.",
@@ -1125,6 +1323,7 @@ def company_action_prepare(
                     AuditLog(
                         entity_type="company",
                         entity_id=company.id,
+                        tenant_id=company.tenant_id,
                         action="ui_outreach_draft_generated",
                         details={
                             "contact_id": top_contact.id,
@@ -1144,6 +1343,7 @@ def company_action_prepare(
                 AuditLog(
                     entity_type="company",
                     entity_id=company.id,
+                    tenant_id=company.tenant_id,
                     action="ui_outreach_draft_skipped",
                     details={
                         "reason": "no_contact_or_country_not_allowed",
@@ -1290,6 +1490,285 @@ def contacts_page(
         },
     }
     return templates.TemplateResponse(request, "contacts.html", context)
+
+
+@router.get("/lists", response_class=HTMLResponse)
+def lists_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    company_total_q = db.query(func.count(Company.id))
+    contact_total_q = db.query(func.count(Contact.id)).join(Company, Company.id == Contact.company_id)
+    campaign_total_q = db.query(func.count(Campaign.id)).join(Company, Company.id == Campaign.company_id)
+    if tenant_id is not None:
+        company_total_q = company_total_q.filter(Company.tenant_id == tenant_id)
+        contact_total_q = contact_total_q.filter(Company.tenant_id == tenant_id)
+        campaign_total_q = campaign_total_q.filter(Company.tenant_id == tenant_id)
+
+    company_total = company_total_q.scalar() or 0
+    contact_total = contact_total_q.scalar() or 0
+    campaign_total = campaign_total_q.scalar() or 0
+
+    sample_lists = [
+        {"name": "All companies", "type": "companies", "records": company_total, "source": "saved view"},
+        {"name": "Contacts for outreach", "type": "contacts", "records": contact_total, "source": "resolver"},
+        {"name": "Campaign-ready", "type": "mixed", "records": campaign_total, "source": "campaigns"},
+    ]
+
+    context = {
+        **_base_context(request, "Lists"),
+        "sample_lists": sample_lists,
+    }
+    return templates.TemplateResponse(request, "lists.html", context)
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+def analytics_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    campaign_q = db.query(Campaign).join(Company, Company.id == Campaign.company_id)
+    message_q = db.query(Message).join(Campaign, Campaign.id == Message.campaign_id).join(Company, Company.id == Campaign.company_id)
+    reply_q = db.query(Reply).join(Message, Message.id == Reply.message_id).join(Campaign, Campaign.id == Message.campaign_id).join(Company, Company.id == Campaign.company_id)
+    if tenant_id is not None:
+        campaign_q = campaign_q.filter(Company.tenant_id == tenant_id)
+        message_q = message_q.filter(Company.tenant_id == tenant_id)
+        reply_q = reply_q.filter(Company.tenant_id == tenant_id)
+
+    total_campaigns = campaign_q.count()
+    sent_messages = message_q.filter(Message.direction == MessageDirection.outbound, Message.sent_at.isnot(None)).count()
+    inbound_messages = message_q.filter(Message.direction == MessageDirection.inbound).count()
+    total_replies = reply_q.count()
+    active_campaigns = campaign_q.filter(Campaign.status == CampaignStatus.active).count()
+    reply_rate = round((total_replies / sent_messages) * 100, 2) if sent_messages else 0.0
+
+    top_campaigns = campaign_q.order_by(Campaign.updated_at.desc()).limit(10).all()
+
+    context = {
+        **_base_context(request, "Analytics"),
+        "kpi": {
+            "campaigns": total_campaigns,
+            "active": active_campaigns,
+            "sent": sent_messages,
+            "inbound": inbound_messages,
+            "replies": total_replies,
+            "reply_rate": reply_rate,
+        },
+        "top_campaigns": top_campaigns,
+    }
+    return templates.TemplateResponse(request, "analytics.html", context)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    member_count_q = db.query(func.count(TenantMembership.id)).filter(TenantMembership.status == "active")
+    if tenant_id is not None:
+        member_count_q = member_count_q.filter(TenantMembership.tenant_id == tenant_id)
+    member_count = member_count_q.scalar() or 0
+
+    recent_auth = db.query(AuditLog).filter(AuditLog.entity_type == "auth")
+    if tenant_id is not None:
+        recent_auth = recent_auth.filter(AuditLog.tenant_id == tenant_id)
+    recent_auth = recent_auth.order_by(AuditLog.created_at.desc()).limit(8).all()
+
+    context = {
+        **_base_context(request, "Settings"),
+        "member_count": member_count,
+        "recent_auth": recent_auth,
+    }
+    return templates.TemplateResponse(request, "settings.html", context)
+
+
+# ---------------------------------------------------------------------------
+# Domains (DNS wizard) — Phase B
+# ---------------------------------------------------------------------------
+
+@router.get("/domains", response_class=HTMLResponse)
+def domains_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    domains: list[SenderDomain] = []
+    from sqlalchemy.orm import joinedload as _jl
+    if tenant_id is not None:
+        domains = (
+            db.query(SenderDomain)
+            .options(
+                _jl(SenderDomain.dns_records),
+                _jl(SenderDomain.dkim_keys),
+                _jl(SenderDomain.managed_selectors).joinedload(ManagedDkimSelector.dkim_key_pair),
+            )
+            .filter(SenderDomain.tenant_id == tenant_id)
+            .order_by(SenderDomain.id)
+            .all()
+        )
+    context = {
+        **_base_context(request, "DNS Wizard"),
+        "domains": domains,
+        "config": settings,
+    }
+    return templates.TemplateResponse(request, "domains.html", context)
+
+
+@router.post("/domains/add")
+def domains_add(
+    request: Request,
+    domain: str = Form(...),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/domains", error="Нет активного тенанта")
+    try:
+        sd = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=normalize_domain(domain))
+    except ValueError as exc:
+        return _flash_redirect("/ui/domains", error=str(exc))
+    db.add(AuditLog(
+        tenant_id=tenant_id,
+        action="domain_added",
+        entity_type="sender_domain",
+        entity_id=sd.id,
+        details={"domain": sd.domain, "dkim_mode": sd.dkim_mode},
+    ))
+    db.commit()
+    return _flash_redirect("/ui/domains", message=f"Домен {sd.domain} добавлен. Скопируйте записи ниже и нажмите Check DNS.")
+
+
+@router.post("/domains/{domain_id}/verify")
+def domains_check_dns_legacy(
+    domain_id: int,
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/domains", error="Нет активного тенанта")
+    from sqlalchemy.orm import joinedload as _jl
+    sd = db.query(SenderDomain).filter(
+        SenderDomain.id == domain_id, SenderDomain.tenant_id == tenant_id
+    ).options(
+        _jl(SenderDomain.dns_records),
+        _jl(SenderDomain.dkim_keys),
+        _jl(SenderDomain.managed_selectors).joinedload(ManagedDkimSelector.dkim_key_pair),
+    ).first()
+    if not sd:
+        return _flash_redirect("/ui/domains", error="Домен не найден")
+    verify_sender_domain(sd)
+    db.add(AuditLog(
+        tenant_id=tenant_id,
+        action="domain_dns_checked",
+        entity_type="sender_domain",
+        entity_id=sd.id,
+        details={"domain": sd.domain, "spf": sd.spf_status, "dkim": sd.dkim_status, "dmarc": sd.dmarc_status, "overall": sd.status},
+    ))
+    db.commit()
+    if sd.send_enabled:
+        return _flash_redirect("/ui/domains", message=f"{sd.domain} verified. Sending is now enabled for {sd.send_from_email}.")
+    return _flash_redirect("/ui/domains", error=f"{sd.domain}: DNS still incomplete. Check the per-record statuses below.")
+
+
+@router.post("/domains/{domain_id}/delete")
+def domains_delete(
+    domain_id: int,
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/domains", error="Нет активного тенанта")
+    sd = db.query(SenderDomain).filter(
+        SenderDomain.id == domain_id, SenderDomain.tenant_id == tenant_id
+    ).first()
+    if not sd:
+        return _flash_redirect("/ui/domains", error="Домен не найден")
+    domain_name = sd.domain
+    db.add(AuditLog(
+        tenant_id=tenant_id,
+        action="domain_deleted",
+        entity_type="sender_domain",
+        entity_id=domain_id,
+        details={"domain": domain_name},
+    ))
+    db.delete(sd)
+    db.commit()
+    return _flash_redirect("/ui/domains", message=f"Домен {domain_name} удалён")
+
+
+@router.post("/domains/{domain_id}/check-dns")
+def domains_check_dns_new(
+    domain_id: int,
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    return domains_check_dns_legacy(domain_id=domain_id, request=request, tenant_id=tenant_id, db=db)
+
+
+@router.post("/domains/{domain_id}/regenerate-dkim")
+def domains_regenerate_dkim(
+    domain_id: int,
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+    _roles=Depends(require_roles("owner", "admin")),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/domains", error="Нет активного тенанта")
+    from sqlalchemy.orm import joinedload as _jl
+    sd = db.query(SenderDomain).filter(
+        SenderDomain.id == domain_id, SenderDomain.tenant_id == tenant_id
+    ).options(
+        _jl(SenderDomain.dns_records),
+        _jl(SenderDomain.dkim_keys),
+        _jl(SenderDomain.managed_selectors).joinedload(ManagedDkimSelector.dkim_key_pair),
+    ).first()
+    if not sd:
+        return _flash_redirect("/ui/domains", error="Домен не найден")
+    rotate_dkim(sd, db)
+    db.add(AuditLog(
+        tenant_id=tenant_id,
+        action="domain_dkim_rotated",
+        entity_type="sender_domain",
+        entity_id=sd.id,
+        details={"domain": sd.domain, "dkim_mode": sd.dkim_mode},
+    ))
+    db.commit()
+    message = (
+        f"Managed DKIM rotated for {sd.domain}. DNS records on the customer side stay the same."
+        if sd.dkim_mode == "cname"
+        else f"DKIM regenerated for {sd.domain}. Update the TXT record and run Check DNS again."
+    )
+    return _flash_redirect("/ui/domains", message=message)
+
+
+@router.get("/billing", response_class=HTMLResponse)
+def billing_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    sent_q = db.query(func.count(Message.id)).join(Campaign, Campaign.id == Message.campaign_id).join(Company, Company.id == Campaign.company_id)
+    company_q = db.query(func.count(Company.id))
+    if tenant_id is not None:
+        sent_q = sent_q.filter(Company.tenant_id == tenant_id)
+        company_q = company_q.filter(Company.tenant_id == tenant_id)
+
+    usage_sent = sent_q.filter(Message.direction == MessageDirection.outbound, Message.sent_at.isnot(None)).scalar() or 0
+    usage_companies = company_q.scalar() or 0
+
+    context = {
+        **_base_context(request, "Billing"),
+        "usage_sent": usage_sent,
+        "usage_companies": usage_companies,
+    }
+    return templates.TemplateResponse(request, "billing.html", context)
 
 
 @router.get("/campaigns", response_class=HTMLResponse)
@@ -1446,24 +1925,77 @@ def messages_page(
 @router.get("/replies", response_class=HTMLResponse)
 def replies_page(
     request: Request,
+    queue: str | None = None,
+    needs_human: str | None = None,
+    company_q: str | None = None,
+    country: str | None = None,
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    rows = (
+    query = (
         db.query(Reply, Message, Campaign, Company, Contact)
         .join(Message, Message.id == Reply.message_id)
         .join(Campaign, Campaign.id == Message.campaign_id)
         .join(Company, Company.id == Campaign.company_id)
         .outerjoin(Contact, Contact.id == Campaign.contact_id)
-        .filter(*( [Company.tenant_id == tenant_id] if tenant_id is not None else [] ))
-        .order_by(Reply.created_at.desc())
-        .limit(300)
-        .all()
     )
+
+    if tenant_id is not None:
+        query = query.filter(Company.tenant_id == tenant_id)
+
+    queue_norm = (queue or "").strip().lower()
+    if queue_norm in {"new", "positive", "neutral", "objection", "auto-reply", "unsubscribe", "spam-risk", "closed"}:
+        label_expr = func.lower(func.coalesce(Reply.label, ""))
+        if queue_norm == "new":
+            query = query.filter(or_(Reply.label.is_(None), label_expr == "", label_expr == "new"))
+        elif queue_norm == "positive":
+            query = query.filter(or_(label_expr.like("%positive%"), label_expr.like("%interested%"), label_expr.like("%warm%"), label_expr.like("%meeting%")))
+        elif queue_norm == "neutral":
+            query = query.filter(label_expr.like("%neutral%"))
+        elif queue_norm == "objection":
+            query = query.filter(or_(label_expr.like("%objection%"), label_expr.like("%not_interested%"), label_expr.like("%rejection%")))
+        elif queue_norm == "auto-reply":
+            query = query.filter(or_(label_expr.like("%auto%"), label_expr.like("%ooo%")))
+        elif queue_norm == "unsubscribe":
+            query = query.filter(label_expr.like("%unsubscribe%"))
+        elif queue_norm == "spam-risk":
+            query = query.filter(or_(label_expr.like("%spam%"), label_expr.like("%abuse%"), label_expr.like("%complaint%")))
+        elif queue_norm == "closed":
+            query = query.filter(
+                Campaign.has_reply.is_(True),
+                Campaign.status.in_([CampaignStatus.replied, CampaignStatus.completed, CampaignStatus.stopped]),
+            )
+
+    needs_human_bool = _to_bool(needs_human)
+    if needs_human_bool is True:
+        query = query.filter(Reply.needs_human.is_(True))
+    elif needs_human_bool is False:
+        query = query.filter(or_(Reply.needs_human.is_(False), Reply.needs_human.is_(None)))
+
+    if company_q:
+        like = f"%{company_q.strip()}%"
+        query = query.filter(or_(Company.domain.ilike(like), Company.name.ilike(like)))
+
+    if country:
+        query = query.filter(Company.country == country)
+
+    rows = query.order_by(Reply.created_at.desc()).limit(300).all()
+
+    countries_q = db.query(Company.country)
+    if tenant_id is not None:
+        countries_q = countries_q.filter(Company.tenant_id == tenant_id)
+    countries = [row[0] for row in countries_q.filter(Company.country.isnot(None)).distinct().order_by(Company.country.asc()).all()]
 
     context = {
         **_base_context(request, "Ответы"),
         "rows": rows,
+        "countries": countries,
+        "filters": {
+            "queue": queue_norm,
+            "needs_human": needs_human or "",
+            "company_q": company_q or "",
+            "country": country or "",
+        },
     }
     return templates.TemplateResponse(request, "replies.html", context)
 
@@ -1510,13 +2042,13 @@ def operations_page(
 
     grouped: dict[str, list[AuditLog]] = {}
     for key, actions in actions_map.items():
-        grouped[key] = (
+        q = (
             db.query(AuditLog)
             .filter(AuditLog.action.in_(actions))
-            .order_by(AuditLog.created_at.desc())
-            .limit(30)
-            .all()
         )
+        if tenant_id is not None:
+            q = q.filter(AuditLog.tenant_id == tenant_id)
+        grouped[key] = q.order_by(AuditLog.created_at.desc()).limit(30).all()
 
     auth_actions = [
         "auth_login_blocked",
@@ -1525,6 +2057,8 @@ def operations_page(
         "auth_login_success",
         "auth_logout",
         "auth_logout_all",
+        "auth_email_verified",
+        "auth_invite_accepted",
         "auth_resend_verification_requested",
         "auth_forgot_password_requested",
         "auth_password_reset_completed",
@@ -1540,25 +2074,26 @@ def operations_page(
     auth_query = db.query(AuditLog).filter(AuditLog.entity_type == "auth")
     if auth_action and auth_action in auth_actions:
         auth_query = auth_query.filter(AuditLog.action == auth_action)
+    if tenant_id is not None:
+        auth_query = auth_query.filter(AuditLog.tenant_id == tenant_id)
     auth_rows = auth_query.order_by(AuditLog.created_at.desc()).limit(100).all()
 
     recent_tasks = db.query(Task).order_by(Task.created_at.desc()).limit(50).all()
     recent_audit = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(100).all()
 
-    errors = [
-        row
-        for row in recent_audit
-        if row.action
-        in {
-            "reply_unmatched_manual_review",
-            "campaign_stopped",
-            "outreach_skipped",
-            "auth_login_failed",
-            "auth_login_blocked",
-            "ui_auth_login_failed",
-            "ui_auth_login_blocked",
-        }
-    ]
+    error_actions = {
+        "reply_unmatched_manual_review",
+        "campaign_stopped",
+        "outreach_skipped",
+        "auth_login_failed",
+        "auth_login_blocked",
+        "ui_auth_login_failed",
+        "ui_auth_login_blocked",
+    }
+    errors_q = db.query(AuditLog).filter(AuditLog.action.in_(error_actions))
+    if tenant_id is not None:
+        errors_q = errors_q.filter(AuditLog.tenant_id == tenant_id)
+    errors = errors_q.order_by(AuditLog.created_at.desc()).limit(50).all()
 
     context = {
         **_base_context(request, "Операции"),
@@ -1598,6 +2133,7 @@ def team_page(
     actor: TenantMembership = Depends(require_roles("viewer", "operator", "manager", "admin", "owner", strict=True)),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _raise_team_ui_disabled()
     if tenant_id is None:
         return _flash_redirect("/ui", error="Выберите tenant")
 
@@ -1630,6 +2166,7 @@ def team_add_member(
     actor: TenantMembership = Depends(require_roles("admin", "owner", strict=True)),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _raise_team_ui_disabled()
     if tenant_id is None:
         return _flash_redirect("/ui/team", error="Tenant не выбран")
     if actor.tenant_id != tenant_id:
@@ -1692,6 +2229,7 @@ def team_update_member(
     actor: TenantMembership = Depends(require_roles("admin", "owner", strict=True)),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _raise_team_ui_disabled()
     if tenant_id is None:
         return _flash_redirect("/ui/team", error="Tenant не выбран")
     if actor.tenant_id != tenant_id:
@@ -1733,6 +2271,7 @@ def team_invite_member(
     actor: TenantMembership = Depends(require_roles("admin", "owner", strict=True)),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _raise_team_ui_disabled()
     if tenant_id is None:
         return _flash_redirect("/ui/team", error="Tenant не выбран")
     if actor.tenant_id != tenant_id:
@@ -2041,7 +2580,7 @@ def actions_run_finder(
     keywords: str = Form(default=""),
     results_per_query: int = Form(default=10),
     tenant_id: int | None = Depends(get_tenant_id),
-    _membership=Depends(require_roles("operator", "manager", "admin", "owner")),
+    _membership=Depends(require_roles("viewer", "operator", "manager", "admin", "owner")),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     countries_list = [part.strip() for part in countries.split(",") if part.strip()]
@@ -2077,7 +2616,7 @@ def actions_run_finder(
 def actions_planner_preview(
     intent: str = Form(...),
     country: str = Form(default="Lithuania"),
-    _membership=Depends(require_roles("operator", "manager", "admin", "owner")),
+    _membership=Depends(require_roles("viewer", "operator", "manager", "admin", "owner")),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
@@ -2111,7 +2650,7 @@ def actions_plan_and_run(
     country: str = Form(default="Lithuania"),
     results_per_query: int = Form(default=20),
     tenant_id: int | None = Depends(get_tenant_id),
-    _membership=Depends(require_roles("operator", "manager", "admin", "owner")),
+    _membership=Depends(require_roles("viewer", "operator", "manager", "admin", "owner")),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
@@ -2364,7 +2903,8 @@ def login_submit(
         db,
         action="ui_auth_login_success",
         user_id=user.id,
-        details={"tenant_id": membership.tenant_id, "email": normalized_email},
+        tenant_id=membership.tenant_id,
+        details={"email": normalized_email},
     )
     response = _flash_redirect("/ui", message="Добро пожаловать!")
     response.set_cookie(
@@ -2427,25 +2967,35 @@ def register_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    password_confirm: str = Form(...),
     full_name: str = Form(default=""),
-    tenant_name: str = Form(...),
+    tenant_name: str = Form(default=""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     from app.api.routes.auth import register as api_register
     from app.schemas.auth import RegisterRequest
 
+    normalized_email = email.strip().lower()
+    if password != password_confirm:
+        return _flash_redirect("/ui/register", error="Пароли не совпадают")
+
+    resolved_tenant_name = (tenant_name or "").strip()
+    if not resolved_tenant_name:
+        local_part = normalized_email.split("@", 1)[0] if "@" in normalized_email else "workspace"
+        resolved_tenant_name = f"{local_part}-workspace"
+
     payload = RegisterRequest(
-        email=email.strip(),
+        email=normalized_email,
         password=password,
         full_name=_trim(full_name),
-        tenant_name=tenant_name.strip(),
+        tenant_name=resolved_tenant_name,
     )
     try:
         session_data = api_register(payload=payload, request=request, db=db)
     except HTTPException as exc:
         return _flash_redirect("/ui/register", error=str(exc.detail))
 
-    response = _flash_redirect("/ui", message="Регистрация успешна! Проверьте email для подтверждения адреса.")
+    response = _flash_redirect("/ui/onboarding/start", message="Аккаунт создан. Завершите onboarding.")
     response.set_cookie(
         key=settings.auth_session_cookie_name,
         value=session_data.token,
@@ -2455,6 +3005,415 @@ def register_submit(
         path="/",
     )
     return response
+
+
+@router.get("/onboarding/start", response_class=HTMLResponse)
+def onboarding_start_page(
+    request: Request,
+    step: int = Query(default=1),
+    domain_id: int | None = Query(default=None),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Single-screen wizard: load all onboarding data."""
+    if tenant_id is None or tenant_id <= 0:
+        return _flash_redirect("/ui/login", error="Сессия не найдена")
+
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if tenant is None:
+        return _flash_redirect("/ui/login", error="Workspace не найден")
+
+    company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
+    from sqlalchemy.orm import joinedload as _jl
+    sender_domains = (
+        db.query(SenderDomain)
+        .options(_jl(SenderDomain.dns_records))
+        .filter(SenderDomain.tenant_id == tenant_id)
+        .order_by(SenderDomain.id.asc())
+        .all()
+    )
+    purpose_order = {"spf": 0, "dkim": 1, "dmarc": 2}
+    for item in sender_domains:
+        item.dns_records = sorted(
+            item.dns_records,
+            key=lambda rec: (purpose_order.get((rec.purpose or "").lower(), 99), rec.id),
+        )
+    ownership_changed = False
+    for item in sender_domains:
+        before_token = item.ownership_token
+        ensure_ownership_token(item)
+        if item.ownership_token != before_token:
+            ownership_changed = True
+    if ownership_changed:
+        db.commit()
+    sender_domain = sender_domains[0] if sender_domains else None
+
+    initial_step = max(1, min(step, 5))
+    step2_completed = bool(
+        sender_domain
+        and sender_domain.ownership_status == "verified"
+        and authentication_status(sender_domain) == "authenticated"
+    )
+
+    context = {
+        **_base_context(request, "Let's set up your workspace"),
+        "workspace_name": tenant.name or "",
+        "company_name": company.name if company else "",
+        "company_website": f"https://{company.domain}" if company and company.domain else "",
+        "company_domain": company.domain if company else "",
+        "domain_id": sender_domain.id if sender_domain else None,
+        "domain_status": sender_domain.status if sender_domain else "pending",
+        "domain_ownership_status": sender_domain.ownership_status if sender_domain else "pending",
+        "domain_verified": sender_domain.send_enabled if sender_domain else False,
+        "domain_spf_status": sender_domain.spf_status if sender_domain else "pending",
+        "domain_dkim_status": sender_domain.dkim_status if sender_domain else "pending",
+        "domain_dmarc_status": sender_domain.dmarc_status if sender_domain else "pending",
+        "domain_dns_records": sender_domain.dns_records if sender_domain else [],
+        "sender_domains": sender_domains,
+        "step2_completed": step2_completed,
+        "sender_name": "",
+        "sender_email": "",
+        "recipient_email": "",
+        "initial_step": initial_step,
+        "initial_domain_id": domain_id,
+    }
+    return templates.TemplateResponse(request, "onboarding_start.html", context)
+
+
+@router.post("/onboarding/start", response_model=None)
+def onboarding_start_submit(
+    request: Request,
+    step: int = Form(...),
+    action: str = Form(default="next"),
+    workspace_name: str = Form(default=""),
+    company_website: str = Form(default=""),
+    company_name: str = Form(default=""),
+    sender_name: str = Form(default=""),
+    sender_email: str = Form(default=""),
+    recipient_email: str = Form(default=""),
+    domain_id: int | None = Form(default=None),
+    verify_domain: str = Form(default=""),
+    ownership_email: str = Form(default=""),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse | dict:
+    """Handle all onboarding steps (1-5) within single screen."""
+    if tenant_id is None or tenant_id <= 0:
+        return {"success": False, "error": "Сессия не найдена"}
+
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if tenant is None:
+        return {"success": False, "error": "Workspace не найден"}
+
+    # Step 1: Company details
+    if step == 1:
+        if not company_website.strip():
+            return {"success": False, "error": "Укажите website компании"}
+
+        domain = _extract_domain_from_website(company_website)
+        if domain is None:
+            return {"success": False, "error": "Некорректный формат website"}
+
+        duplicate = db.query(Company).filter(Company.domain == domain, Company.tenant_id != tenant_id).first()
+        if duplicate is not None:
+            return {"success": False, "error": "Этот домен уже используется в другом workspace"}
+
+        company = db.query(Company).filter(Company.domain == domain, Company.tenant_id == tenant_id).first()
+        if company is None:
+            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
+
+        if company is None:
+            company = Company(
+                tenant_id=tenant_id,
+                domain=domain,
+                name=_trim(company_name) or domain.split('.')[0].title(),
+                status=CompanyStatus.new,
+            )
+            db.add(company)
+        else:
+            company.domain = domain
+            company.name = _trim(company_name) or company.name or domain.split('.')[0].title()
+
+        # Generate workspace_name if not provided (should be auto-generated on frontend)
+        if not workspace_name.strip():
+            workspace_name = _trim(company_name) or domain.split('.')[0].title()
+
+        sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).order_by(SenderDomain.id.asc()).first()
+        if sender_domain is not None and sender_domain.domain != domain:
+            return {
+                "success": False,
+                "error": (
+                    "Для workspace уже настроен другой sender domain. "
+                    "Измените его в DNS Wizard (/ui/domains)."
+                ),
+            }
+
+        tenant.name = workspace_name.strip() or tenant.name
+
+        db.add(AuditLog(
+            tenant_id=tenant_id,
+            action="onboarding_company_saved",
+            entity_type="tenant",
+            entity_id=tenant_id,
+            details={"workspace_name": tenant.name, "website": company_website.strip(), "domain": domain},
+        ))
+        db.commit()
+
+        return {"success": True, "next_step": 2, "reload": True}
+
+    # Step 2: Sender domain management with explicit actions.
+    if step == 2:
+        from sqlalchemy.orm import joinedload as _jl
+        sender_domain = None
+        if domain_id is not None:
+            sender_domain = (
+                db.query(SenderDomain)
+                .options(_jl(SenderDomain.dns_records))
+                .filter(SenderDomain.id == domain_id, SenderDomain.tenant_id == tenant_id)
+                .first()
+            )
+        if sender_domain is None:
+            sender_domain = (
+                db.query(SenderDomain)
+                .options(_jl(SenderDomain.dns_records))
+                .filter(SenderDomain.tenant_id == tenant_id)
+                .order_by(SenderDomain.id.asc())
+                .first()
+            )
+
+        if action == "add_domain":
+            actor = _resolve_request_user(request=request, db=db, tenant_id=tenant_id)
+            if actor is None:
+                return {"success": False, "error": "Please sign in again before adding a sending domain."}
+            if not actor.email_verified:
+                return {"success": False, "error": "Please verify your email before adding a sending domain."}
+            if not actor.is_active:
+                return {"success": False, "error": "Your account must be activated before adding a sending domain."}
+
+            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
+            if company is None or not company.domain:
+                return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
+
+            if sender_domain is None:
+                try:
+                    sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=company.domain)
+                except ValueError as exc:
+                    return {"success": False, "error": str(exc)}
+                db.add(AuditLog(
+                    tenant_id=tenant_id,
+                    action="onboarding_domain_records_generated",
+                    entity_type="sender_domain",
+                    entity_id=sender_domain.id,
+                    details={"domain": sender_domain.domain},
+                ))
+                db.commit()
+            else:
+                ensure_ownership_token(sender_domain)
+                db.commit()
+            return {
+                "success": True,
+                "next_step": 2,
+                "reload": True,
+                "open_domain_id": sender_domain.id,
+            }
+
+        if action == "verify_ownership_email":
+            if sender_domain is None:
+                return {"success": False, "error": "Add a sender domain first."}
+
+            submitted_email = ownership_email.strip()
+            email_domain = _extract_email_domain(submitted_email)
+            if email_domain is None:
+                return {"success": False, "error": "Please enter a valid email address."}
+
+            expected_domain = (sender_domain.domain or "").strip().lower()
+            if email_domain != expected_domain:
+                return {
+                    "success": False,
+                    "error": f"This email must belong to the domain being verified: {sender_domain.domain}",
+                }
+
+            try:
+                message_id = send_domain_ownership_verification_email(
+                    to_email=submitted_email,
+                    domain=sender_domain.domain,
+                    workspace_name=tenant.name or "workspace",
+                )
+            except Exception:
+                return {
+                    "success": False,
+                    "error": "Failed to send verification email. Please check mail settings and try again.",
+                }
+
+            mark_sender_domain_ownership_email_verified(sender_domain, submitted_email)
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                action="onboarding_domain_ownership_email_verified",
+                entity_type="sender_domain",
+                entity_id=sender_domain.id,
+                details={
+                    "domain": sender_domain.domain,
+                    "ownership_status": sender_domain.ownership_status,
+                    "ownership_verified_via": sender_domain.ownership_verified_via,
+                    "ownership_email": sender_domain.ownership_email,
+                    "message_id": message_id,
+                },
+            ))
+            db.commit()
+            return {
+                "success": True,
+                "next_step": 2,
+                "reload": True,
+                "open_domain_id": sender_domain.id,
+            }
+
+        if action == "verify_ownership_dns":
+            if sender_domain is None:
+                return {"success": False, "error": "Add a sender domain first."}
+
+            ensure_ownership_token(sender_domain)
+            ownership_result = verify_sender_domain_ownership_dns(sender_domain)
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                action="onboarding_domain_ownership_dns_checked",
+                entity_type="sender_domain",
+                entity_id=sender_domain.id,
+                details={
+                    "domain": sender_domain.domain,
+                    "ownership_status": sender_domain.ownership_status,
+                    "ownership_method": sender_domain.ownership_method,
+                    "ownership_verified_via": sender_domain.ownership_verified_via,
+                    "ownership_host": sender_domain.ownership_host,
+                    "ownership_result": ownership_result.status,
+                },
+            ))
+            db.commit()
+
+            if ownership_result.status != "verified":
+                if ownership_result.status == "missing":
+                    return {
+                        "success": False,
+                        "error": "Ownership TXT record is not found yet. Please add the record and wait for DNS propagation.",
+                    }
+                return {
+                    "success": False,
+                    "error": "Ownership TXT record exists but does not match the expected verification token.",
+                }
+
+            return {
+                "success": True,
+                "next_step": 2,
+                "reload": True,
+                "open_domain_id": sender_domain.id,
+            }
+
+        if action == "check_dns":
+            if sender_domain is None:
+                return {"success": False, "error": "Add a sender domain first."}
+
+            verify_sender_domain(sender_domain)
+            db.add(AuditLog(
+                tenant_id=tenant_id,
+                action="onboarding_domain_dns_checked",
+                entity_type="sender_domain",
+                entity_id=sender_domain.id,
+                details={
+                    "domain": sender_domain.domain,
+                    "spf": sender_domain.spf_status,
+                    "dkim": sender_domain.dkim_status,
+                    "dmarc": sender_domain.dmarc_status,
+                    "authentication": authentication_status(sender_domain),
+                    "token": verify_domain.strip() if verify_domain.strip() else None,
+                },
+            ))
+            db.commit()
+            return {
+                "success": True,
+                "next_step": 2,
+                "reload": True,
+                "open_domain_id": sender_domain.id,
+            }
+
+        if action == "next":
+            if sender_domain is None:
+                return {"success": False, "error": "Add and verify a sender domain before continuing."}
+            step2_completed = (
+                sender_domain.ownership_status == "verified"
+                and authentication_status(sender_domain) == "authenticated"
+            )
+            if not step2_completed:
+                return {
+                    "success": False,
+                    "error": "Domain setup is not complete yet. Verify ownership and run authentication DNS checks.",
+                }
+            return {"success": True, "next_step": 3}
+
+        return {"success": False, "error": "Unknown step 2 action."}
+
+    # Step 3: Sender setup
+    if step == 3:
+        if not sender_email.strip():
+            return {"success": False, "error": "Укажите sender email"}
+        
+        sender_email_clean = sender_email.strip().lower()
+        
+        # Validate email format
+        if "@" not in sender_email_clean or len(sender_email_clean) < 5:
+            return {"success": False, "error": "Некорректный формат email"}
+        
+        # Get company domain
+        company = db.query(Company).filter(Company.tenant_id == tenant_id).first()
+        if not company or not company.domain:
+            return {"success": False, "error": "Компания не найдена. Вернитесь на шаг 1."}
+        
+        # Check if email belongs to company domain
+        email_domain = sender_email_clean.split("@")[1]
+        if email_domain != company.domain:
+            return {"success": False, "error": f"Email должен быть с домена {company.domain}"}
+        
+        # Store sender email in session or temp storage for step 4
+        db.add(AuditLog(
+            tenant_id=tenant_id,
+            action="onboarding_sender_configured",
+            entity_type="tenant",
+            entity_id=tenant_id,
+            details={"sender_name": _trim(sender_name) or "", "sender_email": sender_email_clean},
+        ))
+        db.commit()
+        
+        return {"success": True, "next_step": 4}
+
+    # Step 4: Test email
+    if step == 4:
+        if not recipient_email.strip():
+            return {"success": False, "error": "Укажите recipient email для теста"}
+        
+        recipient_email_clean = recipient_email.strip().lower()
+        
+        # Validate email format
+        if "@" not in recipient_email_clean or len(recipient_email_clean) < 5:
+            return {"success": False, "error": "Некорректный формат recipient email"}
+        
+        # TODO: Send actual test email here
+        # For now just log it
+        db.add(AuditLog(
+            tenant_id=tenant_id,
+            action="onboarding_test_email_sent",
+            entity_type="tenant",
+            entity_id=tenant_id,
+            details={"recipient_email": recipient_email_clean, "sender_email": sender_email.strip()},
+        ))
+        db.commit()
+        
+        return {"success": True, "next_step": 5}
+
+    # Step 5: Complete onboarding
+    if step == 5:
+        if action == "finish":
+            return _flash_redirect("/ui", message="Onboarding завершен! Добро пожаловать в workspace.")
+        return {"success": True}
+
+    return {"success": False, "error": "Invalid step"}
 
 
 # ---------------------------------------------------------------------------

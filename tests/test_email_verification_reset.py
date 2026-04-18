@@ -458,12 +458,14 @@ def test_ui_register_sets_cookie():
             data={
                 "email": "newcorp@example.com",
                 "password": "MyPass12!",
+                "password_confirm": "MyPass12!",
                 "full_name": "New User",
                 "tenant_name": "New Corp",
             },
             follow_redirects=False,
         )
         assert resp.status_code in (302, 303)
+        assert "/ui/onboarding/start" in resp.headers.get("location", "")
         assert "auth_session" in resp.cookies
     finally:
         app.dependency_overrides.clear()

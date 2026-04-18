@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.audit_log import AuditLog
 from app.models.campaign import Campaign, CampaignStatus
@@ -30,6 +31,7 @@ def generate_outreach_for_company(self, company_id: int, tenant_id: int | None =
                 AuditLog(
                     entity_type="company",
                     entity_id=company.id,
+                    tenant_id=company.tenant_id,
                     action="outreach_skipped",
                     details={"reason": "country_not_allowed", "country": company.country},
                     reason="Skipped because country not allowed for outreach.",
@@ -46,6 +48,32 @@ def generate_outreach_for_company(self, company_id: int, tenant_id: int | None =
                 "company_id": company_id,
                 "status": str(company.status),
             }
+
+        min_score = float(settings.outreach_min_qualification_score)
+        score = float(company.score or 0)
+        if company.score is None or score < min_score:
+            db.add(
+                AuditLog(
+                    entity_type="company",
+                    entity_id=company.id,
+                    tenant_id=company.tenant_id,
+                    action="outreach_skipped",
+                    details={
+                        "reason": "qualification_score_below_min",
+                        "score": company.score,
+                        "min_score": min_score,
+                    },
+                    reason="Skipped because qualification score is below configured minimum.",
+                )
+            )
+            db.commit()
+            logger.info(
+                "Outreach skipped by score guardrail: company_id=%s score=%s min_score=%s",
+                company.id,
+                company.score,
+                min_score,
+            )
+            return {"ok": False, "error": "qualification_score_below_min", "company_id": company_id}
 
         contact = (
             db.query(Contact)
@@ -66,6 +94,7 @@ def generate_outreach_for_company(self, company_id: int, tenant_id: int | None =
                 AuditLog(
                     entity_type="company",
                     entity_id=company.id,
+                    tenant_id=company.tenant_id,
                     action="outreach_skipped",
                     details={"reason": skip_reason, "domain": company.domain, "email": contact.email},
                     reason="Skipped because blacklisted before campaign generation.",
@@ -160,6 +189,7 @@ def generate_outreach_for_company(self, company_id: int, tenant_id: int | None =
             AuditLog(
                 entity_type="campaign",
                 entity_id=campaign.id,
+                tenant_id=company.tenant_id if company else None,
                 action="outreach_sequence_generated",
                 details={
                     "company_id": company_id,

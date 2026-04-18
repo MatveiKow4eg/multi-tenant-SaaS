@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+.dw-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+.dw-title { font-size:1.4rem; font-weight:600; }
+.badge { display:inline-block; padding:.2em .6em; border-radius:4px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.badge-pending  { background:#f0f0f0; color:#666; }
+.badge-verified { background:#d4edda; color:#155724; }
+.badge-failed   { background:#f8d7da; color:#721c24; }
+.badge-missing  { background:#fff3cd; color:#856404; }
+.badge-mismatch { background:#f8d7da; color:#721c24; }
+.domain-card { border:1px solid #e0e0e0; border-radius:8px; margin-bottom:1.5rem; overflow:hidden; }
+.domain-card-header { display:flex; align-items:center; gap:.75rem; padding:1rem 1.25rem; background:#fafafa; border-bottom:1px solid #e0e0e0; }
+.domain-card-header h3 { margin:0; font-size:1rem; font-weight:600; }
+.domain-card-body { padding:1.25rem; }
+.record-section { margin-bottom:1.25rem; }
+.record-section-title { font-size:.8rem; font-weight:600; text-transform:uppercase; color:#888; letter-spacing:.06em; margin-bottom:.5rem; display:flex; align-items:center; gap:.5rem; }
+.record-table { width:100%; border-collapse:collapse; font-size:.85rem; }
+.record-table th { text-align:left; padding:.4rem .6rem; border-bottom:2px solid #e0e0e0; color:#555; font-weight:600; white-space:nowrap; }
+.record-table td { padding:.45rem .6rem; border-bottom:1px solid #f0f0f0; vertical-align:top; }
+.record-table tr:last-child td { border-bottom:none; }
+.value-cell { font-family:monospace; font-size:.8rem; word-break:break-all; max-width:420px; }
+.copy-btn { background:none; border:1px solid #ccc; border-radius:4px; padding:.15rem .5rem; font-size:.75rem; cursor:pointer; color:#555; white-space:nowrap; }
+.copy-btn:hover { background:#f0f0f0; }
+.copy-btn.copied { border-color:#28a745; color:#28a745; }
+.error-hint { font-size:.78rem; color:#c0392b; margin-top:.25rem; }
+.domain-actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:1rem; }
+.btn { display:inline-block; padding:.4rem .9rem; border-radius:5px; font-size:.85rem; font-weight:500; cursor:pointer; border:none; }
+.btn-primary { background:#0d6efd; color:#fff; }
+.btn-primary:hover { background:#0b5ed7; }
+.btn-danger { background:#dc3545; color:#fff; }
+.btn-danger:hover { background:#bb2d3b; }
+.btn-secondary { background:#fff; color:#333; border:1px solid #ccc; }
+.btn-secondary:hover { background:#f5f5f5; }
+.send-enabled { font-size:.8rem; margin-left:auto; }
+.empty-state { text-align:center; padding:3rem 1rem; color:#888; }
+.empty-state-icon { font-size:2.5rem; margin-bottom:.5rem; }
+.add-form-card { max-width:480px; }
+.stack-form label { display:block; font-size:.85rem; font-weight:500; margin-bottom:.3rem; color:#333; }
+.stack-form input[type=text] { width:100%; padding:.45rem .6rem; border:1px solid #ccc; border-radius:5px; font-size:.9rem; box-sizing:border-box; }
+.stack-form input[type=text]:focus { outline:none; border-color:#0d6efd; box-shadow:0 0 0 2px rgba(13,110,253,.2); }
+.flash { padding:.75rem 1rem; border-radius:5px; margin-bottom:1rem; font-size:.9rem; }
+.flash-ok  { background:#d4edda; color:#155724; }
+.flash-err { background:#f8d7da; color:#721c24; }
+</style>
+
+{% if flash_message %}
+<div class="flash flash-ok">{{ flash_message }}</div>
+{% endif %}
+{% if flash_error %}
+<div class="flash flash-err">{{ flash_error }}</div>
+{% endif %}
+
+<div class="dw-header">
+    <div class="dw-title">DNS Wizard — Sender Domains</div>
+</div>
+
+<!-- Add domain form — only when no domain yet -->
+{% if not domains %}
+<div class="card add-form-card" style="margin-bottom:2rem">
+    <h3 style="margin-top:0">Add sender domain</h3>
+    <p class="muted" style="font-size:.85rem;margin-bottom:1rem">Add a domain you own. We'll generate the DNS records you need to configure.</p>
+    <form method="post" action="/ui/domains/add" class="stack-form">
+        <label>Domain
+            <input type="text" name="domain" placeholder="example.com" required autocomplete="off" />
+        </label>
+        <div style="margin-top:.75rem">
+            <button type="submit" class="btn btn-primary">Add domain</button>
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="card add-form-card" style="margin-bottom:2rem;background:#f9f9f9">
+    <p class="muted" style="margin:0;font-size:.85rem">&#128274; Один домен уже привязан к аккаунту. Удалите текущий домен, чтобы добавить другой.</p>
+</div>
+{% endif %}
+
+<!-- Registered domains -->
+{% if domains %}
+    {% for d in domains %}
+    <div class="domain-card">
+        <div class="domain-card-header">
+            <h3>{{ d.domain }}</h3>
+            {% if d.status == 'verified' %}
+                <span class="badge badge-verified">Verified</span>
+            {% elif d.status == 'failed' %}
+                <span class="badge badge-failed">Failed</span>
+            {% else %}
+                <span class="badge badge-pending">Pending</span>
+            {% endif %}
+            {% if d.is_default %}
+                <span class="badge badge-verified">Default</span>
+            {% endif %}
+            <span class="send-enabled">
+                <span class="muted" style="margin-right:.75rem">Send as <code>{{ d.send_from_email }}</code></span>
+                {% if d.send_enabled %}
+                    <span style="color:#155724">&#10003; Sending enabled</span>
+                {% else %}
+                    <span style="color:#856404">&#9888; Sending disabled — verify DNS first</span>
+                {% endif %}
+            </span>
+        </div>
+
+        <div class="domain-card-body">
+            {% set spf_records = d.dns_records | selectattr('purpose', 'equalto', 'spf') | list %}
+            {% set dkim_records = d.dns_records | selectattr('purpose', 'equalto', 'dkim') | list %}
+            {% set dmarc_records = d.dns_records | selectattr('purpose', 'equalto', 'dmarc') | list %}
+
+            <div class="muted" style="font-size:.82rem;margin-bottom:1rem">
+                DKIM mode: <strong>{{ d.dkim_mode }}</strong>
+                {% if d.dkim_mode == 'cname' %}
+                    · Managed selectors with backend key rotation
+                {% else %}
+                    · TXT fallback mode
+                {% endif %}
+            </div>
+
+            {% if spf_records %}
+            <div class="record-section">
+                <div class="record-section-title">
+                    SPF
+                    {% if d.spf_status == 'verified' %}<span class="badge badge-verified">Verified</span>
+                    {% elif d.spf_status == 'failed' %}<span class="badge badge-mismatch">Mismatch</span>
+                    {% else %}<span class="badge badge-pending">Pending</span>{% endif %}
+                </div>
+                <table class="record-table">
+                    <thead><tr><th>Type</th><th>Host / Name</th><th>Value</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                    {% for spf in spf_records %}
+                    <tr>
+                        <td>{{ spf.record_type }}</td>
+                        <td><code>@</code></td>
+                        <td class="value-cell"><code id="rec-{{ spf.id }}">{{ spf.value }}</code></td>
+                        <td>
+                            {% if spf.status == 'verified' %}<span class="badge badge-verified">OK</span>
+                            {% elif spf.status == 'mismatch' %}<span class="badge badge-mismatch">Mismatch</span>
+                            {% elif spf.status == 'missing' %}<span class="badge badge-missing">Missing</span>
+                            {% else %}<span class="badge badge-pending">—</span>{% endif %}
+                        </td>
+                        <td><button class="copy-btn" type="button" onclick="copyVal('rec-{{ spf.id }}', this)">Copy</button></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% for spf in spf_records if spf.error_message %}
+                    <div class="error-hint">{{ spf.error_message }}</div>
+                {% endfor %}
+                {% for spf in spf_records if spf.status == 'mismatch' and spf.actual_value %}
+                    <div class="error-hint">Existing record: <code>{{ spf.actual_value[:120] }}</code><br>
+                    Tip: add <code>include:{{ config.spf_include_domain }}</code> to your existing SPF record instead of replacing it.</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if dkim_records %}
+            <div class="record-section">
+                <div class="record-section-title">
+                    DKIM
+                    {% if d.dkim_status == 'verified' %}<span class="badge badge-verified">Verified</span>
+                    {% elif d.dkim_status == 'failed' %}<span class="badge badge-mismatch">Mismatch</span>
+                    {% else %}<span class="badge badge-pending">Pending</span>{% endif %}
+                </div>
+                <table class="record-table">
+                    <thead><tr><th>Type</th><th>Host / Name</th><th>Value</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                    {% for dkim in dkim_records %}
+                    <tr>
+                        <td>{{ dkim.record_type }}</td>
+                        <td><code>{{ dkim.host }}.{{ d.domain }}</code></td>
+                        <td class="value-cell"><code id="rec-{{ dkim.id }}">{{ dkim.value }}</code></td>
+                        <td>
+                            {% if dkim.status == 'verified' %}<span class="badge badge-verified">OK</span>
+                            {% elif dkim.status == 'mismatch' %}<span class="badge badge-mismatch">Mismatch</span>
+                            {% elif dkim.status == 'missing' %}<span class="badge badge-missing">Missing</span>
+                            {% else %}<span class="badge badge-pending">—</span>{% endif %}
+                        </td>
+                        <td><button class="copy-btn" type="button" onclick="copyVal('rec-{{ dkim.id }}', this)">Copy</button></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% if d.dkim_mode == 'cname' %}
+                <div class="muted" style="font-size:.78rem;margin-top:.4rem">Managed mode: keep both `s1` and `s2` CNAME records in DNS. Future key rotations will not require DNS changes on the customer side.</div>
+                {% endif %}
+                {% for dkim in dkim_records if dkim.error_message %}
+                    <div class="error-hint">{{ dkim.error_message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if dmarc_records %}
+            <div class="record-section">
+                <div class="record-section-title">
+                    DMARC
+                    {% if d.dmarc_status == 'verified' %}<span class="badge badge-verified">Verified</span>
+                    {% elif d.dmarc_status == 'failed' %}<span class="badge badge-mismatch">Mismatch</span>
+                    {% else %}<span class="badge badge-pending">Pending</span>{% endif %}
+                </div>
+                <table class="record-table">
+                    <thead><tr><th>Type</th><th>Host / Name</th><th>Value</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                    {% for dmarc in dmarc_records %}
+                    <tr>
+                        <td>{{ dmarc.record_type }}</td>
+                        <td><code>{{ dmarc.host }}.{{ d.domain if dmarc.host != '@' else '' }}</code></td>
+                        <td class="value-cell"><code id="rec-{{ dmarc.id }}">{{ dmarc.value }}</code></td>
+                        <td>
+                            {% if dmarc.status == 'verified' %}<span class="badge badge-verified">OK</span>
+                            {% elif dmarc.status == 'mismatch' %}<span class="badge badge-mismatch">Mismatch</span>
+                            {% elif dmarc.status == 'missing' %}<span class="badge badge-missing">Missing</span>
+                            {% else %}<span class="badge badge-pending">—</span>{% endif %}
+                        </td>
+                        <td><button class="copy-btn" type="button" onclick="copyVal('rec-{{ dmarc.id }}', this)">Copy</button></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% for dmarc in dmarc_records if dmarc.error_message %}
+                    <div class="error-hint">{{ dmarc.error_message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="domain-actions">
+                <form method="post" action="/ui/domains/{{ d.id }}/check-dns">
+                    <button type="submit" class="btn btn-primary">Check DNS</button>
+                </form>
+                <form method="post" action="/ui/domains/{{ d.id }}/regenerate-dkim">
+                    <button type="submit" class="btn btn-secondary">Regenerate DKIM</button>
+                </form>
+                <form method="post" action="/ui/domains/{{ d.id }}/delete"
+                      onsubmit="return confirm('Delete domain {{ d.domain }}?')">
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+                {% if d.last_checked_at %}
+                <span class="muted" style="align-self:center;font-size:.78rem;margin-left:auto">
+                    Last checked: {{ d.last_checked_at.strftime('%Y-%m-%d %H:%M UTC') }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+<div class="empty-state card">
+    <div class="empty-state-icon">&#128274;</div>
+    <div>No sender domains yet.</div>
+    <div class="muted" style="font-size:.85rem;margin-top:.25rem">Add your first domain above to get started.</div>
+</div>
+{% endif %}
+
+<script>
+function copyVal(elemId, btn) {
+    const text = document.getElementById(elemId).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    });
+}
+</script>
+{% endblock %}

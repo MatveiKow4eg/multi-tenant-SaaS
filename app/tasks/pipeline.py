@@ -125,6 +125,7 @@ def prepare_company_full(self, company_id: int, job_id: str, tenant_id: int | No
                     db.add(CompanyPage(company_id=company.id, url=p.url, page_type=p.page_type, raw_text=p.text))
             db.add(AuditLog(
                 entity_type="company", entity_id=company.id, action="site_researched",
+                tenant_id=company.tenant_id,
                 details={"pages_found": len(research_result.pages), "source": "prepare_all"},
                 reason="prepare_all pipeline",
             ))
@@ -149,6 +150,7 @@ def prepare_company_full(self, company_id: int, job_id: str, tenant_id: int | No
             )
             db.add(AuditLog(
                 entity_type="company", entity_id=company.id, action="company_qualified",
+                tenant_id=company.tenant_id,
                 details={**qualification, "source": "prepare_all"},
                 reason="prepare_all pipeline",
             ))
@@ -161,6 +163,7 @@ def prepare_company_full(self, company_id: int, job_id: str, tenant_id: int | No
             contacts = db.query(Contact).filter(Contact.company_id == company_id).all()
             db.add(AuditLog(
                 entity_type="company", entity_id=company.id, action="contacts_resolved",
+                tenant_id=company.tenant_id,
                 details={"created": len(created), "source": "prepare_all"},
                 reason="prepare_all pipeline",
             ))
@@ -201,6 +204,7 @@ def prepare_company_full(self, company_id: int, job_id: str, tenant_id: int | No
                 db.add(AuditLog(
                     entity_type="company", entity_id=company.id,
                     action="ui_outreach_draft_generated",
+                    tenant_id=company.tenant_id,
                     details={
                         "contact_id": top_contact.id,
                         "contact_email": top_contact.email,

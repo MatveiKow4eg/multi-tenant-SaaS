@@ -42,6 +42,7 @@ def run_research_and_qualify(self, company_id: int, tenant_id: int | None = None
             AuditLog(
                 entity_type="company",
                 entity_id=company.id,
+                tenant_id=company.tenant_id,
                 action="site_researched",
                 details={
                     "pages_found": len(research.pages),
@@ -51,6 +52,7 @@ def run_research_and_qualify(self, company_id: int, tenant_id: int | None = None
                 reason="Researcher module completed website crawl.",
             )
         )
+        # Note: company.tenant_id set on all task-written AuditLog below
 
         company.status = CompanyStatus.qualifying
         qualification = qualify_company(research)
@@ -76,6 +78,7 @@ def run_research_and_qualify(self, company_id: int, tenant_id: int | None = None
                 AuditLog(
                     entity_type="company",
                     entity_id=company.id,
+                    tenant_id=company.tenant_id,
                     action="qualified_but_skipped_country",
                     details={
                         "country": company.country,
@@ -97,6 +100,7 @@ def run_research_and_qualify(self, company_id: int, tenant_id: int | None = None
             AuditLog(
                 entity_type="company",
                 entity_id=company.id,
+                tenant_id=company.tenant_id,
                 action="company_qualified",
                 details=qualification,
                 reason="Qualifier module completed company assessment.",
@@ -107,6 +111,7 @@ def run_research_and_qualify(self, company_id: int, tenant_id: int | None = None
                 AuditLog(
                     entity_type="company",
                     entity_id=company.id,
+                    tenant_id=company.tenant_id,
                     action="contacts_resolved",
                     details={
                         "contacts_created": len(contacts_created),

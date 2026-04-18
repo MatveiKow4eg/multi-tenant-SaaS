@@ -13,6 +13,7 @@ ALLOWED_LABELS = [
     "not_now",
     "not_interested",
     "wrong_contact",
+    "bounced",
     "auto_reply",
     "out_of_office",
     "forwarded_internal",
@@ -33,6 +34,27 @@ SCHEMA = {
 
 def _fallback_classify(subject: str, body: str) -> dict:
     low = f"{subject} {body}".lower()
+    if any(
+        k in low
+        for k in [
+            "mailer-daemon",
+            "delivery status notification",
+            "delivery has failed",
+            "delivery failed",
+            "undeliverable",
+            "recipient address rejected",
+            "user unknown",
+            "unknown user",
+            "5.1.1",
+            "550 5.1.1",
+        ]
+    ):
+        return {
+            "label": "bounced",
+            "summary": "Delivery failed (bounce) detected for outbound email.",
+            "needs_human": False,
+            "next_action": "stop_campaign_and_mark_bounce",
+        }
     if any(k in low for k in ["out of office", "automatic reply", "auto-reply"]):
         return {
             "label": "out_of_office",

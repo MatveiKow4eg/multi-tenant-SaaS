@@ -29,7 +29,7 @@ def _cookie_value_from_set_cookie(set_cookie_header: str, cookie_name: str) -> s
     return ""
 
 
-def test_ui_post_requires_csrf_when_auth_cookie_present(monkeypatch):
+def test_ui_team_routes_are_disabled(monkeypatch):
     db = _build_test_session()
 
     def _override_db():
@@ -38,14 +38,10 @@ def test_ui_post_requires_csrf_when_auth_cookie_present(monkeypatch):
         finally:
             pass
 
-    def _fake_send_invite_email(*, to_email: str, invite_url: str, tenant_name: str, role: str):
-        return "msg-1"
-
     class _FakeConnectivity:
         smtp_ok = True
         imap_ok = True
 
-    monkeypatch.setattr("app.ui.routes.send_invite_email", _fake_send_invite_email)
     monkeypatch.setattr("app.ui.routes.check_zone_connectivity", lambda: _FakeConnectivity())
     app.dependency_overrides[get_db] = _override_db
     client = TestClient(app)
@@ -64,13 +60,15 @@ def test_ui_post_requires_csrf_when_auth_cookie_present(monkeypatch):
         auth_token = reg_owner.json()["token"]
         client.cookies.set("auth_session", auth_token)
 
-        # Issue CSRF cookie via UI GET.
         page = client.get("/ui/team")
-        assert page.status_code == 200
+        assert page.status_code == 404
+
+        ui_home = client.get("/ui")
+        assert ui_home.status_code == 200
         csrf_token = client.cookies.get("csrf_token")
         assert csrf_token
 
-        denied = client.post(
+        invite_resp = client.post(
             "/ui/team/invite",
             data={
                 "email": "invitee@example.com",
@@ -79,9 +77,9 @@ def test_ui_post_requires_csrf_when_auth_cookie_present(monkeypatch):
             },
             follow_redirects=False,
         )
-        assert denied.status_code == 403
+        assert invite_resp.status_code == 403
 
-        allowed = client.post(
+        invite_resp_with_csrf = client.post(
             "/ui/team/invite",
             data={
                 "email": "invitee@example.com",
@@ -91,7 +89,7 @@ def test_ui_post_requires_csrf_when_auth_cookie_present(monkeypatch):
             },
             follow_redirects=False,
         )
-        assert allowed.status_code == 303
+        assert invite_resp_with_csrf.status_code == 404
     finally:
         app.dependency_overrides.clear()
         db.close()
@@ -134,6 +132,17 @@ def test_ui_logout_clears_cookie_and_invalidates_session():
             follow_redirects=False,
         )
         assert logout.status_code == 303
+        assert logout.headers["location"].startswith("/ui?msg=")
+
+        private_after_logout = client.get(logout.headers["location"], follow_redirects=False)
+        assert private_after_logout.status_code == 303
+        assert private_after_logout.headers["location"].startswith("/ui/login")
+
+        login_page = client.get(private_after_logout.headers["location"])
+        assert login_page.status_code == 200
+        assert "Dashboard" not in login_page.text
+        assert "Companies" not in login_page.text
+        assert "Вы вышли из системы" in login_page.text
 
         me = client.get("/api/auth/me")
         assert me.status_code == 401

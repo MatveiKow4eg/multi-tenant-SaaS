@@ -76,7 +76,7 @@ def test_owner_can_add_and_update_tenant_member():
         db.close()
 
 
-def test_viewer_cannot_add_members_but_can_view_team_page(monkeypatch):
+def test_viewer_cannot_add_members_and_team_page_is_disabled(monkeypatch):
     db = _build_test_session()
 
     def _override_db():
@@ -129,7 +129,7 @@ def test_viewer_cannot_add_members_but_can_view_team_page(monkeypatch):
         viewer_token = login_viewer.json()["token"]
 
         ui_team = client.get("/ui/team", headers={"Authorization": f"Bearer {viewer_token}"})
-        assert ui_team.status_code == 200
+        assert ui_team.status_code == 404
 
         denied = client.post(
             "/api/members",

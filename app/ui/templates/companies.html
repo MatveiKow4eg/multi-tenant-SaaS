@@ -2,7 +2,21 @@
 {% import "_ui_macros.html" as ui %}
 {% block content %}
 <section class="card">
-    <h3>Фильтры</h3>
+    <h3>AI Search</h3>
+    <form method="get" class="filters-grid">
+        <label class="filter-span-2">Поисковый запрос
+            <input type="text" name="q" value="{{ filters.q }}" placeholder="бетонные фирмы в Литве, металлообработка в Эстонии, ..." />
+        </label>
+        <div class="filters-actions">
+            <button type="submit">Найти</button>
+            <a class="btn-link" href="/ui/actions">Глубокий поиск</a>
+        </div>
+    </form>
+    <p class="muted small">Подсказка: используйте свободный текст и затем уточняйте выдачу фильтрами ниже.</p>
+</section>
+
+<section class="card">
+    <h3>Фильтры и сегментация</h3>
     <form method="get" class="filters-grid companies-filters">
         <label class="filter-span-2">Поиск по домену/названию <input type="text" name="q" value="{{ filters.q }}" placeholder="Например: acme.lt или Acme" /></label>
         <label>Страна
@@ -64,6 +78,7 @@
 </section>
 
 <section class="card">
+    <h3>Результаты поиска компаний</h3>
     <div class="companies-summary-strip">
         <div class="summary-pill">
             <span>Найдено компаний</span>

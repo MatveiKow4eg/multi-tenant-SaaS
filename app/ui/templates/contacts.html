@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-    <h3>Фильтры</h3>
+    <h3>Фильтры контактов</h3>
     <form method="get" class="filters-grid">
         <label>Роль
             <select name="role">
@@ -23,6 +23,11 @@
             <a class="btn-link" href="/ui/contacts">Сбросить</a>
         </div>
     </form>
+    <div class="quick-chips-row">
+        <a class="quick-chip" href="/ui/contacts?confidence_min=0.8">Verified only (0.8+)</a>
+        <a class="quick-chip" href="/ui/contacts?role=owner">Owner / decision maker</a>
+        <a class="quick-chip" href="/ui/contacts?role=sales">Sales contacts</a>
+    </div>
 </section>
 
 <section class="card">

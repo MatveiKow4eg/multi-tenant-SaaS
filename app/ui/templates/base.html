@@ -4,51 +4,117 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ page_title }} | bot_lertisento</title>
-    <link rel="stylesheet" href="{{ url_for('ui_static', path='style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('ui_static', path='style.css') }}?v=8" />
 </head>
 <body>
-    <header class="topbar">
-        <div class="brand">
-            <a href="/ui">bot_lertisento</a>
-            <span class="sub">локальная операционная панель</span>
-        </div>
-        <nav class="main-nav">
-            <a class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}" href="/ui">Панель</a>
-            <a class="nav-link {% if active_nav == 'companies' %}active{% endif %}" href="/ui/companies">Компании</a>
-            <a class="nav-link {% if active_nav == 'campaigns' %}active{% endif %}" href="/ui/campaigns">Кампании</a>
-            <a class="nav-link {% if active_nav == 'messages' %}active{% endif %}" href="/ui/messages">Сообщения</a>
-            <a class="nav-link {% if active_nav == 'replies' %}active{% endif %}" href="/ui/replies">Ответы</a>
-            <a class="nav-link {% if active_nav == 'operations' %}active{% endif %}" href="/ui/operations">Операции</a>
-            <details class="nav-more {% if active_nav in ['contacts', 'handoffs', 'actions', 'team'] %}active{% endif %}">
-                <summary>Еще</summary>
-                <div class="nav-more-menu">
-                    <a class="nav-link {% if active_nav == 'contacts' %}active{% endif %}" href="/ui/contacts">Контакты</a>
-                    <a class="nav-link {% if active_nav == 'handoffs' %}active{% endif %}" href="/ui/handoffs">Передачи</a>
-                    <a class="nav-link {% if active_nav == 'actions' %}active{% endif %}" href="/ui/actions">Действия</a>
-                    <a class="nav-link {% if active_nav == 'team' %}active{% endif %}" href="/ui/team">Команда</a>
-                </div>
-            </details>
-            <form method="post" action="/ui/logout" class="inline-form">
-                <button type="submit" class="btn-link">Выйти</button>
-            </form>
-        </nav>
-    </header>
+    {% set auth_paths = ['/ui/login', '/ui/register', '/ui/forgot-password', '/ui/reset-password', '/ui/accept-invite'] %}
+    {% set is_onboarding_start = request.url.path == '/ui/onboarding/start' %}
+    {% set is_auth_page = request.url.path in auth_paths or request.url.path.startswith('/ui/onboarding') %}
+    {% set rendered_content %}{% block content %}{% endblock %}{% endset %}
 
-    <main class="container">
-        <div class="page-head">
-            <h1>{{ page_title }}</h1>
-            <p class="muted">Серверный рендеринг на FastAPI + Jinja2.</p>
-        </div>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
 
-        {% if flash_message %}
-            <div class="flash flash-ok">{{ flash_message }}</div>
-        {% endif %}
-        {% if flash_error %}
-            <div class="flash flash-err">{{ flash_error }}</div>
-        {% endif %}
-
-        {% block content %}{% endblock %}
+    {% if is_auth_page %}
+    {% if is_onboarding_start %}
+    <main class="onboarding-start-page">
+        {{ rendered_content | safe }}
     </main>
+    {% else %}
+    <main class="auth-shell">
+        <section class="auth-brand">
+            <a href="/ui" class="auth-logo">bot_lertisento</a>
+            <p class="muted">B2B leadgen workspace</p>
+        </section>
+        <section class="auth-content">
+            {% if flash_message %}
+                <div class="flash flash-ok">{{ flash_message }}</div>
+            {% endif %}
+            {% if flash_error %}
+                <div class="flash flash-err">{{ flash_error }}</div>
+            {% endif %}
+            {{ rendered_content | safe }}
+        </section>
+    </main>
+    {% endif %}
+    {% else %}
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <a href="/ui">bot_lertisento</a>
+                <span class="sub">B2B outreach control center</span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <p class="nav-group-title">Workspace</p>
+                <a class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}" href="/ui"><span class="nav-ico">DB</span><span>Dashboard</span></a>
+                <a class="nav-link {% if active_nav == 'companies' %}active{% endif %}" href="/ui/companies"><span class="nav-ico">CO</span><span>Companies</span></a>
+                <a class="nav-link {% if active_nav == 'contacts' %}active{% endif %}" href="/ui/contacts"><span class="nav-ico">CT</span><span>Contacts</span></a>
+                <a class="nav-link {% if active_nav == 'lists' %}active{% endif %}" href="/ui/lists"><span class="nav-ico">LI</span><span>Lists</span></a>
+
+                <p class="nav-group-title">Execution</p>
+                <a class="nav-link {% if active_nav == 'campaigns' %}active{% endif %}" href="/ui/campaigns"><span class="nav-ico">CA</span><span>Campaigns</span></a>
+                <a class="nav-link {% if active_nav == 'replies' %}active{% endif %}" href="/ui/replies"><span class="nav-ico">IN</span><span>Inbox / Replies</span></a>
+                <a class="nav-link {% if active_nav == 'messages' %}active{% endif %}" href="/ui/messages"><span class="nav-ico">MS</span><span>Messages</span></a>
+                <a class="nav-link {% if active_nav == 'handoffs' %}active{% endif %}" href="/ui/handoffs"><span class="nav-ico">HF</span><span>Handoffs</span></a>
+
+                <p class="nav-group-title">Control</p>
+                <a class="nav-link {% if active_nav == 'operations' %}active{% endif %}" href="/ui/operations"><span class="nav-ico">OP</span><span>Operations</span></a>
+                <a class="nav-link {% if active_nav == 'actions' %}active{% endif %}" href="/ui/actions"><span class="nav-ico">AC</span><span>Actions</span></a>
+                <span class="nav-link nav-link-disabled"><span class="nav-ico">TR</span><span>Team & roles</span></span>
+                <a class="nav-link {% if active_nav == 'analytics' %}active{% endif %}" href="/ui/analytics"><span class="nav-ico">AN</span><span>Analytics</span></a>
+                <a class="nav-link {% if active_nav == 'domains' %}active{% endif %}" href="/ui/domains"><span class="nav-ico">DN</span><span>DNS Wizard</span></a>
+                <a class="nav-link {% if active_nav == 'settings' %}active{% endif %}" href="/ui/settings"><span class="nav-ico">ST</span><span>Settings</span></a>
+                <a class="nav-link {% if active_nav == 'billing' %}active{% endif %}" href="/ui/billing"><span class="nav-ico">BL</span><span>Billing</span></a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <p class="muted small">Workspace</p>
+                <strong>{{ workspace_label }}</strong>
+            </div>
+
+            <form method="post" action="/ui/logout" class="logout-form">
+                <button type="submit" class="btn-link btn-link-full">Выйти</button>
+            </form>
+        </aside>
+
+        <div class="workspace-area">
+            <header class="topbar {% if active_nav == 'dashboard' %}topbar-compact{% endif %}">
+                {% if active_nav != 'dashboard' %}
+                <div class="topbar-left">
+                    <strong class="workspace-label">Workspace</strong>
+                    <span class="workspace-chip">{{ workspace_label }}</span>
+                </div>
+                {% endif %}
+                <div class="topbar-right">
+                    <form method="get" action="/ui/companies" class="top-search">
+                        <input type="text" name="q" placeholder="Search companies, domains, industries" />
+                        <button type="submit">Найти</button>
+                    </form>
+                    <span class="usage-chip usage-chip-strong">Credits: n/a</span>
+                    <a class="btn-primary" href="/ui/campaigns">+ Кампания</a>
+                </div>
+            </header>
+
+            <main class="container">
+                {% block page_header %}
+                <div class="page-head">
+                    <h1>{{ page_title }}</h1>
+                </div>
+                {% endblock %}
+
+                {% if flash_message %}
+                    <div class="flash flash-ok">{{ flash_message }}</div>
+                {% endif %}
+                {% if flash_error %}
+                    <div class="flash flash-err">{{ flash_error }}</div>
+                {% endif %}
+
+                {{ rendered_content | safe }}
+            </main>
+        </div>
+    </div>
+    {% endif %}
     <script>
     (function () {
         function getCookie(name) {
@@ -80,5 +146,6 @@
         }
     })();
     </script>
+    {% block page_scripts %}{% endblock %}
 </body>
 </html>

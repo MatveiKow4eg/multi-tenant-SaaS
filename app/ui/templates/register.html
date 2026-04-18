@@ -1,31 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card" style="max-width:480px;margin:auto;">
-    <h3>Регистрация</h3>
+    <h3>Create account</h3>
     <form method="post" action="/ui/register" class="stack-form">
-        <label>Полное имя
-            <input type="text" name="full_name" />
-        </label>
-        <label>Email
+        <label>Work email
             <input type="email" name="email" required />
         </label>
-        <label>Пароль <span style="color:var(--muted)">(минимум 8 символов)</span>
+        <label>Password <span style="color:var(--muted)">(minimum 8 chars)</span>
             <input type="password" name="password" minlength="8" required />
         </label>
-        <label>Название workspace
-            <input type="text" name="tenant_name" required minlength="2" maxlength="255" />
+        <label>Confirm password
+            <input type="password" name="password_confirm" minlength="8" required />
         </label>
-        <button type="submit">Зарегистрироваться</button>
+        <button type="submit">Create account</button>
     </form>
+    <div class="stack-form" style="margin-top:0.8rem;">
+        <button type="button" disabled title="OAuth будет подключен на следующем этапе">Continue with Google</button>
+        <button type="button" disabled title="OAuth будет подключен на следующем этапе">Continue with Microsoft</button>
+    </div>
     <p style="margin-top:1rem;">
-        Уже есть аккаунт? <a href="/ui/login">Войти</a>
+        Already have an account? <a href="/ui/login">Sign in</a>
     </p>
     <hr style="margin:1rem 0; opacity:0.35;" />
     <form method="post" action="/ui/resend-verification" class="stack-form">
-        <label>Уже зарегистрированы, но не получили письмо подтверждения?
+        <label>Did not receive verification email?
             <input type="email" name="email" placeholder="you@example.com" required />
         </label>
-        <button type="submit">Отправить подтверждение повторно</button>
+        <button type="submit">Resend verification</button>
     </form>
 </section>
 {% endblock %}

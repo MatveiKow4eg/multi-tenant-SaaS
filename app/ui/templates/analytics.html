@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Analytics overview</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill"><span>Campaigns</span><strong>{{ kpi.campaigns }}</strong></div>
+        <div class="summary-pill"><span>Active campaigns</span><strong>{{ kpi.active }}</strong></div>
+        <div class="summary-pill"><span>Sent</span><strong>{{ kpi.sent }}</strong></div>
+        <div class="summary-pill"><span>Replies</span><strong>{{ kpi.replies }}</strong></div>
+        <div class="summary-pill"><span>Reply rate</span><strong>{{ kpi.reply_rate }}%</strong></div>
+    </div>
+</section>
+
+<section class="card">
+    <h3>Recent campaign performance</h3>
+    <table>
+        <thead>
+            <tr><th>Campaign</th><th>Status</th><th>Step</th><th>Has reply</th><th>Updated</th></tr>
+        </thead>
+        <tbody>
+            {% for campaign in top_campaigns %}
+            <tr>
+                <td><a href="/ui/campaigns/{{ campaign.id }}">#{{ campaign.id }}</a></td>
+                <td>{{ campaign.status }}</td>
+                <td>{{ campaign.step }}</td>
+                <td>{{ campaign.has_reply }}</td>
+                <td>{{ campaign.updated_at }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="muted">Кампаний пока нет.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+    <h3>Workspace settings</h3>
+    <div class="companies-summary-strip">
+        <div class="summary-pill"><span>Active members</span><strong>{{ member_count }}</strong></div>
+        <div class="summary-pill"><span>Security</span><strong>2FA / sessions</strong></div>
+        <div class="summary-pill"><span>Mail setup</span><strong>Domains + mailboxes</strong></div>
+    </div>
+</section>
+
+<section class="split-2">
+    <article class="card">
+        <h3>Sections</h3>
+        <ul class="plain-list">
+            <li>Workspace</li>
+            <li>Team and Roles</li>
+            <li>Domains</li>
+            <li>Mailboxes</li>
+            <li>Sending limits</li>
+            <li>Integrations</li>
+            <li>Security</li>
+        </ul>
+    </article>
+    <article class="card">
+        <h3>Recent auth activity</h3>
+        <table class="compact-table">
+            <thead><tr><th>Action</th><th>Reason</th><th>Time</th></tr></thead>
+            <tbody>
+                {% for row in recent_auth %}
+                <tr>
+                    <td>{{ row.action }}</td>
+                    <td>{{ row.reason or '-' }}</td>
+                    <td>{{ row.created_at }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="3" class="muted">Auth-событий пока нет.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </article>
+</section>
+{% endblock %}

@@ -1,0 +1,969 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="onb-shell">
+    <section class="onb-card">
+            {% if flash_message %}
+            <div class="onb-pill onb-pill-success">{{ flash_message }}</div>
+            {% endif %}
+            {% if flash_error %}
+            <div class="onb-pill onb-pill-error">{{ flash_error }}</div>
+            {% endif %}
+
+            <!-- Stepper -->
+            <ol class="onb-steps" aria-label="Onboarding steps">
+                <li class="onb-step onb-step-active" data-step="1">
+                    <span class="onb-step-num">1</span>
+                    <span class="onb-step-label">Company</span>
+                </li>
+                <li class="onb-step" data-step="2">
+                    <span class="onb-step-num">2</span>
+                    <span class="onb-step-label">Domain</span>
+                </li>
+                <li class="onb-step" data-step="3">
+                    <span class="onb-step-num">3</span>
+                    <span class="onb-step-label">Sender</span>
+                </li>
+                <li class="onb-step" data-step="4">
+                    <span class="onb-step-num">4</span>
+                    <span class="onb-step-label">Test</span>
+                </li>
+                <li class="onb-step" data-step="5">
+                    <span class="onb-step-num">5</span>
+                    <span class="onb-step-label">Ready</span>
+                </li>
+            </ol>
+
+            <!-- Panels Container -->
+            <div class="onb-panels">
+                <!-- Step 1: Company -->
+                <div class="onb-panel onb-panel-active" data-step="1">
+                    <h3 class="onb-panel-title">Company details</h3>
+                    <p class="onb-panel-subtitle">Let's start with your workspace info.</p>
+                    <form id="step-1-form" class="onb-form" data-step="1">
+                        <input type="hidden" name="step" value="1">
+                        <input type="hidden" name="action" value="next">
+                        <input type="hidden" name="workspace_name" value="{{ workspace_name }}">
+                        
+                        <label class="onb-form-group">
+                            <span class="onb-label">Company website</span>
+                            <input 
+                                type="url" 
+                                name="company_website" 
+                                value="{{ company_website }}"
+                                placeholder="https://company.com" 
+                                required 
+                            />
+                        </label>
+
+                        <label class="onb-form-group">
+                            <span class="onb-label">Company name (optional)</span>
+                            <input 
+                                type="text" 
+                                name="company_name" 
+                                value="{{ company_name }}"
+                                maxlength="255" 
+                                placeholder="Company Name"
+                            />
+                        </label>
+                    </form>
+                </div>
+
+                <!-- Step 2: Domain -->
+                <div class="onb-panel" data-step="2">
+                    <div class="onb-step2-head">
+                        <div>
+                            <h3 class="onb-panel-title">Sender Domains</h3>
+                            <p class="onb-panel-subtitle">Add DNS records to verify and authenticate your domain before continuing.</p>
+                        </div>
+                        <button type="button" class="onb-btn-primary onb-step2-action" data-step2-action="add_domain">Add / Verify Domain</button>
+                    </div>
+
+                    <form id="step-2-form" class="onb-form" data-step="2">
+                        <input type="hidden" name="step" value="2">
+                        <input type="hidden" name="action" value="next">
+                        <input type="hidden" name="domain_id" value="{{ domain_id or '' }}">
+                        <input type="hidden" name="verify_domain" value="">
+                    </form>
+
+                    {% if not sender_domains %}
+                    <div class="onb-empty-state onb-empty-state-large">
+                        <div class="onb-empty-title">No sending domains yet</div>
+                        <p class="onb-text-muted">Add your domain to generate DNS records.</p>
+                        <button type="button" class="onb-btn-primary onb-step2-action" data-step2-action="add_domain">Add / Verify Domain</button>
+                    </div>
+                    {% else %}
+                    <div class="onb-domain-list">
+                        {% for d in sender_domains %}
+                        {% set auth_ok = d.spf_status == 'verified' and d.dkim_status == 'verified' and d.dmarc_status == 'verified' %}
+                        {% set auth_failed = d.spf_status == 'failed' or d.dkim_status == 'failed' or d.dmarc_status == 'failed' %}
+                        {% set spf_records = d.dns_records | selectattr('purpose', 'equalto', 'spf') | list %}
+                        {% set dkim_records = d.dns_records | selectattr('purpose', 'equalto', 'dkim') | list %}
+                        {% set dmarc_records = d.dns_records | selectattr('purpose', 'equalto', 'dmarc') | list %}
+                        {% set spf_open = d.spf_status != 'verified' %}
+                        {% set dkim_open = d.dkim_status != 'verified' %}
+                        {% set dmarc_open = d.dmarc_status != 'verified' %}
+
+                        <div class="onb-domain-row">
+                            <div class="onb-domain-row-left">
+                                <div class="onb-domain-row-name">{{ d.domain }}</div>
+                                <div class="onb-domain-row-date">Created: {% if d.created_at %}{{ d.created_at.strftime('%Y-%m-%d') }}{% else %}-{% endif %}</div>
+                            </div>
+                            <div class="onb-domain-row-right">
+                                <button
+                                    type="button"
+                                    class="onb-status-link onb-open-verification"
+                                    data-domain-id="{{ d.id }}"
+                                    data-domain-name="{{ d.domain }}"
+                                    data-ownership-type="TXT"
+                                    data-ownership-host="{{ d.ownership_host }}"
+                                    data-ownership-value="{{ d.ownership_token or '' }}"
+                                    data-ownership-status="{{ d.ownership_status }}"
+                                    data-ownership-via="{{ d.ownership_verified_via or d.ownership_method or '' }}"
+                                >
+                                    <span>Verification</span>
+                                    {% if d.ownership_status == 'verified' %}
+                                    <span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                    {% elif d.ownership_status == 'failed' %}
+                                    <span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                    {% else %}
+                                    <span class="onb-mini-badge onb-mini-badge-pending">Pending</span>
+                                    {% endif %}
+                                </button>
+                                <button type="button" class="onb-status-link onb-open-auth" data-domain-id="{{ d.id }}" data-domain-name="{{ d.domain }}">
+                                    <span>Authentication</span>
+                                    {% if auth_ok %}
+                                    <span class="onb-mini-badge onb-mini-badge-success">Authenticated</span>
+                                    {% elif auth_failed %}
+                                    <span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                    {% else %}
+                                    <span class="onb-mini-badge onb-mini-badge-pending">Pending</span>
+                                    {% endif %}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="onb-auth-source" id="onb-auth-source-{{ d.id }}" hidden>
+                            <div class="onb-auth-setup" data-auth-domain-id="{{ d.id }}">
+                                <section class="onb-auth-section{% if spf_open %} is-open{% endif %}" data-auth-section="spf">
+                                    <button type="button" class="onb-auth-section-head onb-auth-acc-toggle" aria-expanded="{% if spf_open %}true{% else %}false{% endif %}">
+                                        <span class="onb-auth-title-wrap">
+                                            <span class="onb-auth-title">SPF</span>
+                                            {% if d.spf_status == 'verified' %}
+                                            <span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                            {% elif d.spf_status == 'failed' %}
+                                            <span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                            {% elif spf_records|length == 0 %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                            {% else %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Pending</span>
+                                            {% endif %}
+                                        </span>
+                                        <span class="onb-auth-chevron">▾</span>
+                                    </button>
+                                    <div class="onb-auth-section-body" {% if not spf_open %}hidden{% endif %}>
+                                        <p class="onb-auth-helper">Authenticate your envelope sender by adding this SPF record to your domain DNS.</p>
+                                        {% if spf_records %}
+                                        <div class="onb-auth-grid">
+                                            <div class="onb-auth-grid-head">Type</div>
+                                            <div class="onb-auth-grid-head">Host</div>
+                                            <div class="onb-auth-grid-head">Value</div>
+                                            <div class="onb-auth-grid-head">Status</div>
+                                            <div class="onb-auth-grid-head">Action</div>
+                                            {% for rec in spf_records %}
+                                            <div class="onb-auth-cell">{{ rec.record_type }}</div>
+                                            <div class="onb-auth-cell">{{ rec.host }}</div>
+                                            <div class="onb-auth-cell onb-auth-cell-value"><code id="onb-rec-{{ rec.id }}">{{ rec.value }}</code></div>
+                                            <div class="onb-auth-cell">
+                                                {% if rec.status == 'verified' %}<span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                                {% elif rec.status == 'failed' %}<span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                                {% elif rec.status == 'mismatch' %}<span class="onb-mini-badge onb-mini-badge-failed">Mismatch</span>
+                                                {% elif rec.status == 'missing' %}<span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                                {% else %}<span class="onb-mini-badge onb-mini-badge-pending">Pending</span>{% endif %}
+                                            </div>
+                                            <div class="onb-auth-cell"><button type="button" class="copy-btn onb-copy" data-copy-target="onb-rec-{{ rec.id }}">Copy</button></div>
+                                            {% endfor %}
+                                        </div>
+                                        {% else %}
+                                        <div class="onb-auth-empty">
+                                            <p>Authentication records have not been generated yet.</p>
+                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </section>
+
+                                <section class="onb-auth-section{% if dkim_open %} is-open{% endif %}" data-auth-section="dkim">
+                                    <button type="button" class="onb-auth-section-head onb-auth-acc-toggle" aria-expanded="{% if dkim_open %}true{% else %}false{% endif %}">
+                                        <span class="onb-auth-title-wrap">
+                                            <span class="onb-auth-title">DKIM</span>
+                                            {% if d.dkim_status == 'verified' %}
+                                            <span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                            {% elif d.dkim_status == 'failed' %}
+                                            <span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                            {% elif dkim_records|length == 0 %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                            {% else %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Pending</span>
+                                            {% endif %}
+                                        </span>
+                                        <span class="onb-auth-chevron">▾</span>
+                                    </button>
+                                    <div class="onb-auth-section-body" {% if not dkim_open %}hidden{% endif %}>
+                                        <p class="onb-auth-helper">Sign outgoing messages by adding the required DKIM record(s).</p>
+                                        {% if dkim_records %}
+                                        <div class="onb-auth-grid">
+                                            <div class="onb-auth-grid-head">Type</div>
+                                            <div class="onb-auth-grid-head">Host</div>
+                                            <div class="onb-auth-grid-head">Value</div>
+                                            <div class="onb-auth-grid-head">Status</div>
+                                            <div class="onb-auth-grid-head">Action</div>
+                                            {% for rec in dkim_records %}
+                                            <div class="onb-auth-cell">{{ rec.record_type }}</div>
+                                            <div class="onb-auth-cell">{{ rec.host }}.{{ d.domain }}</div>
+                                            <div class="onb-auth-cell onb-auth-cell-value"><code id="onb-rec-{{ rec.id }}">{{ rec.value }}</code></div>
+                                            <div class="onb-auth-cell">
+                                                {% if rec.status == 'verified' %}<span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                                {% elif rec.status == 'failed' %}<span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                                {% elif rec.status == 'mismatch' %}<span class="onb-mini-badge onb-mini-badge-failed">Mismatch</span>
+                                                {% elif rec.status == 'missing' %}<span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                                {% else %}<span class="onb-mini-badge onb-mini-badge-pending">Pending</span>{% endif %}
+                                            </div>
+                                            <div class="onb-auth-cell"><button type="button" class="copy-btn onb-copy" data-copy-target="onb-rec-{{ rec.id }}">Copy</button></div>
+                                            {% endfor %}
+                                        </div>
+                                        {% else %}
+                                        <div class="onb-auth-empty">
+                                            <p>Authentication records have not been generated yet.</p>
+                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </section>
+
+                                <section class="onb-auth-section{% if dmarc_open %} is-open{% endif %}" data-auth-section="dmarc">
+                                    <button type="button" class="onb-auth-section-head onb-auth-acc-toggle" aria-expanded="{% if dmarc_open %}true{% else %}false{% endif %}">
+                                        <span class="onb-auth-title-wrap">
+                                            <span class="onb-auth-title">DMARC</span>
+                                            {% if d.dmarc_status == 'verified' %}
+                                            <span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                            {% elif d.dmarc_status == 'failed' %}
+                                            <span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                            {% elif dmarc_records|length == 0 %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                            {% else %}
+                                            <span class="onb-mini-badge onb-mini-badge-pending">Pending</span>
+                                            {% endif %}
+                                        </span>
+                                        <span class="onb-auth-chevron">▾</span>
+                                    </button>
+                                    <div class="onb-auth-section-body" {% if not dmarc_open %}hidden{% endif %}>
+                                        <p class="onb-auth-helper">Set reporting and policy instructions for receiving servers.</p>
+                                        {% if dmarc_records %}
+                                        <div class="onb-auth-grid">
+                                            <div class="onb-auth-grid-head">Type</div>
+                                            <div class="onb-auth-grid-head">Host</div>
+                                            <div class="onb-auth-grid-head">Value</div>
+                                            <div class="onb-auth-grid-head">Status</div>
+                                            <div class="onb-auth-grid-head">Action</div>
+                                            {% for rec in dmarc_records %}
+                                            <div class="onb-auth-cell">{{ rec.record_type }}</div>
+                                            <div class="onb-auth-cell">{{ rec.host }}{% if rec.host != '@' %}.{{ d.domain }}{% endif %}</div>
+                                            <div class="onb-auth-cell onb-auth-cell-value"><code id="onb-rec-{{ rec.id }}">{{ rec.value }}</code></div>
+                                            <div class="onb-auth-cell">
+                                                {% if rec.status == 'verified' %}<span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                                {% elif rec.status == 'failed' %}<span class="onb-mini-badge onb-mini-badge-failed">Failed</span>
+                                                {% elif rec.status == 'mismatch' %}<span class="onb-mini-badge onb-mini-badge-failed">Mismatch</span>
+                                                {% elif rec.status == 'missing' %}<span class="onb-mini-badge onb-mini-badge-pending">Missing</span>
+                                                {% else %}<span class="onb-mini-badge onb-mini-badge-pending">Pending</span>{% endif %}
+                                            </div>
+                                            <div class="onb-auth-cell"><button type="button" class="copy-btn onb-copy" data-copy-target="onb-rec-{{ rec.id }}">Copy</button></div>
+                                            {% endfor %}
+                                        </div>
+                                        {% else %}
+                                        <div class="onb-auth-empty">
+                                            <p>Authentication records have not been generated yet.</p>
+                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </section>
+
+                                <div class="onb-auth-modal-footer">
+                                    <button type="button" class="onb-btn-primary onb-modal-step2-action" data-step2-action="check_dns" data-domain-id="{{ d.id }}">Check DNS now</button>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="onb-step2-bottom-actions">
+                        {% set active_domain = sender_domains[0] %}
+                        {% if active_domain and active_domain.ownership_status == 'verified' and active_domain.spf_status == 'verified' and active_domain.dkim_status == 'verified' and active_domain.dmarc_status == 'verified' %}
+                        <button type="button" class="onb-btn-primary onb-btn-primary-strong onb-step2-action" data-step2-action="next" data-domain-id="{{ active_domain.id }}">Continue to Sender</button>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <div class="onb-modal" id="onb-verification-modal" hidden>
+                        <div class="onb-modal-overlay" data-close-modal="onb-verification-modal"></div>
+                        <div class="onb-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="onb-verification-title">
+                            <button type="button" class="onb-modal-close" data-close-modal="onb-verification-modal" aria-label="Close">&times;</button>
+                            <h4 id="onb-verification-title" class="onb-modal-title">Domain ownership verification</h4>
+
+                            <div class="onb-tabs" role="tablist" aria-label="Verification options">
+                                <button type="button" class="onb-tab is-active" data-tab-target="onb-tab-email">Verify by email</button>
+                                <button type="button" class="onb-tab" data-tab-target="onb-tab-dns">DNS verification</button>
+                            </div>
+
+                            <div class="onb-tab-panel is-active" id="onb-tab-email">
+                                <label class="onb-form-group">
+                                    <span class="onb-label">Email address</span>
+                                    <input type="email" id="onb-own-email-input" placeholder="admin@domain.com" />
+                                </label>
+                                <p class="onb-modal-help" id="onb-own-email-help">Use an address on this domain (for example admin@domain.com).</p>
+                                <p class="onb-modal-validation" id="onb-own-email-error" hidden></p>
+                                <button type="button" class="onb-btn-primary" id="onb-verify-ownership-email-btn" data-domain-id="">Verify ownership</button>
+                            </div>
+
+                            <div class="onb-tab-panel" id="onb-tab-dns">
+                                <div class="onb-record-card">
+                                    <div class="onb-record-card-head"><h5>DNS TXT verification record</h5></div>
+                                    <div class="onb-record-line"><span>Type</span><strong id="onb-own-type">TXT</strong></div>
+                                    <div class="onb-record-line"><span>Host</span><strong id="onb-own-host">_lertisento-verify</strong></div>
+                                    <div class="onb-record-line onb-record-value-line"><span>Value</span><code id="onb-own-value"></code></div>
+                                    <div class="onb-record-actions">
+                                        <button type="button" class="copy-btn onb-copy" data-copy-target="onb-own-value">Copy</button>
+                                    </div>
+                                </div>
+                                <p class="onb-text-muted">Add this TXT record in your DNS provider, wait propagation, then click Verify ownership.</p>
+                                <button type="button" class="onb-btn-primary" id="onb-verify-ownership-dns-btn" data-domain-id="">Verify ownership</button>
+                            </div>
+
+                            <div class="onb-modal-success" id="onb-own-success" hidden>
+                                <span class="onb-mini-badge onb-mini-badge-success">Verified</span>
+                                <span id="onb-own-success-text">Ownership verification completed.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="onb-modal" id="onb-auth-modal" hidden>
+                        <div class="onb-modal-overlay" data-close-modal="onb-auth-modal"></div>
+                        <div class="onb-modal-dialog onb-modal-dialog-wide" role="dialog" aria-modal="true" aria-labelledby="onb-auth-title">
+                            <button type="button" class="onb-modal-close" data-close-modal="onb-auth-modal" aria-label="Close">&times;</button>
+                            <h4 id="onb-auth-title" class="onb-modal-title">Authentication records</h4>
+                            <div id="onb-auth-body"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Sender -->
+                <div class="onb-panel" data-step="3">
+                    <h3 class="onb-panel-title">Sender email</h3>
+                    <p class="onb-panel-subtitle">Set up your default sender.</p>
+                    <form id="step-3-form" class="onb-form" data-step="3">
+                        <input type="hidden" name="step" value="3">
+                        <input type="hidden" name="action" value="next">
+
+                        <label class="onb-form-group">
+                            <span class="onb-label">Sender name</span>
+                            <input 
+                                type="text" 
+                                name="sender_name" 
+                                value="{{ sender_name }}"
+                                placeholder="Your Name" 
+                                maxlength="255"
+                            />
+                        </label>
+
+                        <label class="onb-form-group">
+                            <span class="onb-label">Sender email</span>
+                            <input 
+                                type="email" 
+                                name="sender_email" 
+                                value="{{ sender_email }}"
+                                placeholder="hello@{{ company_domain or 'company.com' }}" 
+                                required 
+                            />
+                        </label>
+                    </form>
+                </div>
+
+                <!-- Step 4: Test -->
+                <div class="onb-panel" data-step="4">
+                    <h3 class="onb-panel-title">Test email</h3>
+                    <p class="onb-panel-subtitle">Send a test email to verify everything works.</p>
+                    <form id="step-4-form" class="onb-form" data-step="4">
+                        <input type="hidden" name="step" value="4">
+                        <input type="hidden" name="action" value="next">
+
+                        <label class="onb-form-group">
+                            <span class="onb-label">Recipient email</span>
+                            <input 
+                                type="email" 
+                                name="recipient_email" 
+                                value="{{ recipient_email }}"
+                                placeholder="test@example.com" 
+                                required 
+                            />
+                        </label>
+                        <p class="onb-text-muted">We'll send you a test email to confirm deliverability.</p>
+                    </form>
+                </div>
+
+                <!-- Step 5: Ready -->
+                <div class="onb-panel" data-step="5">
+                    <h3 class="onb-panel-title">You're all set!</h3>
+                    <p class="onb-panel-subtitle">Your workspace is ready to use.</p>
+                    <div class="onb-ready-summary">
+                        <div class="onb-check-item">
+                            <span class="onb-check-icon">✓</span>
+                            <span>Workspace created</span>
+                        </div>
+                        <div class="onb-check-item">
+                            <span class="onb-check-icon">✓</span>
+                            <span>Domain verified</span>
+                        </div>
+                        <div class="onb-check-item">
+                            <span class="onb-check-icon">✓</span>
+                            <span>Sender configured</span>
+                        </div>
+                        <div class="onb-check-item">
+                            <span class="onb-check-icon">✓</span>
+                            <span>Test email sent</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <div class="onb-actions">
+                <button id="btn-back" type="button" class="onb-btn-secondary" style="display: none;">← Back</button>
+                <button id="btn-continue" type="button" class="onb-btn-primary">Continue →</button>
+                <a href="/ui/logout" class="onb-btn-secondary">Sign out</a>
+            </div>
+    </section>
+</section>
+
+<script>
+(function() {
+    let currentStep = 1;
+    const totalSteps = 5;
+    const initialStep = Number('{{ initial_step }}') || 1;
+    const btnBack = document.getElementById('btn-back');
+    const btnContinue = document.getElementById('btn-continue');
+
+    // Helper to get cookie value
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }
+
+    // Show panel and update stepper
+    function goToStep(step) {
+        if (step < 1 || step > totalSteps) return;
+        
+        // Hide all panels
+        document.querySelectorAll('.onb-panel').forEach(p => {
+            p.classList.remove('onb-panel-active');
+        });
+        document.querySelectorAll('.onb-step').forEach(s => {
+            s.classList.remove('onb-step-active');
+        });
+
+        // Show current panel
+        document.querySelector(`.onb-panel[data-step="${step}"]`).classList.add('onb-panel-active');
+        document.querySelector(`.onb-step[data-step="${step}"]`).classList.add('onb-step-active');
+
+        currentStep = step;
+
+        // Update button states
+        btnBack.style.display = currentStep > 1 ? 'inline-flex' : 'none';
+        btnContinue.style.display = currentStep === 2 ? 'none' : 'inline-flex';
+        
+        if (currentStep === totalSteps) {
+            btnContinue.textContent = 'Finish setup';
+            btnContinue.setAttribute('data-action', 'finish');
+        } else {
+            btnContinue.textContent = 'Continue →';
+            btnContinue.removeAttribute('data-action');
+        }
+
+        // Clear error
+        document.querySelectorAll('.onb-pill-error').forEach(el => el.remove());
+    }
+
+    function showOnboardingError(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'onb-pill onb-pill-error';
+        errorDiv.textContent = message;
+        document.querySelector('.onb-card').insertBefore(
+            errorDiv,
+            document.querySelector('.onb-steps')
+        );
+    }
+
+    async function submitStepForm(stepNumber, actionValue, extraFields = {}) {
+        const stepForm = document.querySelector(`#step-${stepNumber}-form`);
+        if (!stepForm) {
+            return { success: false, error: 'Step form not found' };
+        }
+
+        const formData = new FormData(stepForm);
+        formData.set('step', stepNumber);
+        formData.set('action', actionValue);
+        Object.keys(extraFields).forEach((key) => {
+            if (extraFields[key] !== null && extraFields[key] !== undefined && extraFields[key] !== '') {
+                formData.set(key, String(extraFields[key]));
+            }
+        });
+
+        const csrfToken = getCookie('csrf_token');
+        const response = await fetch('/ui/onboarding/start', {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-CSRF-Token': csrfToken || ''
+            }
+        });
+
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            return response.json();
+        }
+
+        if (response.status === 303 || response.status === 302) {
+            window.location.href = response.url;
+            return { success: true };
+        }
+        if (response.ok) {
+            window.location.href = '/ui';
+            return { success: true };
+        }
+        return { success: false, error: 'Unexpected response' };
+    }
+
+    btnBack.addEventListener('click', () => {
+        goToStep(currentStep - 1);
+    });
+
+    btnContinue.addEventListener('click', async () => {
+        // For step 5, no form submission needed (finish action)
+        if (currentStep === 5) {
+            // Finish setup - redirect to workspace
+            window.location.href = '/ui';
+            return;
+        }
+
+        if (currentStep === 2) {
+            return;
+        }
+
+        try {
+            const result = await submitStepForm(currentStep, 'next');
+            if (result.success) {
+                if (result.reload) {
+                    const nextStep = result.next_step || currentStep + 1;
+                    const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                    window.location.href = `/ui/onboarding/start?step=${nextStep}${domainQuery}`;
+                    return;
+                }
+                goToStep(result.next_step);
+            } else {
+                showOnboardingError(result.error || 'An error occurred');
+            }
+        } catch (err) {
+            console.error('Fetch error:', err);
+            showOnboardingError('Failed to process step: ' + err.message);
+        }
+    });
+
+    document.querySelectorAll('.onb-step2-action').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const actionValue = btn.getAttribute('data-step2-action') || 'next';
+            const domainRowId = btn.getAttribute('data-domain-id');
+            try {
+                const result = await submitStepForm(2, actionValue, {
+                    domain_id: domainRowId || ''
+                });
+
+                if (!result.success) {
+                    showOnboardingError(result.error || 'Unable to complete domain action');
+                    return;
+                }
+
+                if (result.reload) {
+                    const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                    window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+                    return;
+                }
+
+                if (result.next_step) {
+                    goToStep(result.next_step);
+                }
+            } catch (err) {
+                showOnboardingError('Failed to process domain action: ' + err.message);
+            }
+        });
+    });
+
+    function openModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+        modal.removeAttribute('hidden');
+        document.body.classList.add('onb-modal-open');
+    }
+
+    function closeModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+        modal.setAttribute('hidden', 'hidden');
+        if (!document.querySelector('.onb-modal:not([hidden])')) {
+            document.body.classList.remove('onb-modal-open');
+        }
+    }
+
+    document.querySelectorAll('[data-close-modal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const modalId = btn.getAttribute('data-close-modal');
+            if (modalId) closeModal(modalId);
+        });
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        document.querySelectorAll('.onb-modal:not([hidden])').forEach((modal) => {
+            modal.setAttribute('hidden', 'hidden');
+        });
+        document.body.classList.remove('onb-modal-open');
+    });
+
+    document.querySelectorAll('.onb-open-verification').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const domainId = btn.getAttribute('data-domain-id') || '';
+            const domainName = btn.getAttribute('data-domain-name') || '';
+            const type = btn.getAttribute('data-ownership-type') || 'TXT';
+            const host = btn.getAttribute('data-ownership-host') || '_lertisento-verify';
+            const value = btn.getAttribute('data-ownership-value') || '';
+            const ownershipStatus = btn.getAttribute('data-ownership-status') || 'pending';
+            const ownershipVia = btn.getAttribute('data-ownership-via') || '';
+            const fullHost = host === '@' ? domainName : (host.endsWith(`.${domainName}`) ? host : `${host}.${domainName}`);
+
+            const title = document.getElementById('onb-verification-title');
+            const typeNode = document.getElementById('onb-own-type');
+            const hostNode = document.getElementById('onb-own-host');
+            const valueNode = document.getElementById('onb-own-value');
+            const verifyDnsBtn = document.getElementById('onb-verify-ownership-dns-btn');
+            const verifyEmailBtn = document.getElementById('onb-verify-ownership-email-btn');
+            const emailInput = document.getElementById('onb-own-email-input');
+            const emailHelp = document.getElementById('onb-own-email-help');
+            const emailError = document.getElementById('onb-own-email-error');
+            const successBox = document.getElementById('onb-own-success');
+            const successText = document.getElementById('onb-own-success-text');
+
+            if (title) title.textContent = `Domain ownership verification for ${domainName}`;
+            if (typeNode) typeNode.textContent = type;
+            if (hostNode) hostNode.textContent = fullHost;
+            if (valueNode) valueNode.textContent = value;
+            if (verifyDnsBtn) verifyDnsBtn.setAttribute('data-domain-id', domainId);
+            if (verifyEmailBtn) verifyEmailBtn.setAttribute('data-domain-id', domainId);
+
+            if (emailInput) {
+                emailInput.setAttribute('data-domain-name', domainName);
+                emailInput.placeholder = `admin@${domainName}`;
+                emailInput.disabled = ownershipStatus === 'verified';
+                if (ownershipStatus !== 'verified') {
+                    emailInput.value = '';
+                }
+            }
+            if (emailHelp) {
+                emailHelp.textContent = `Use an address on ${domainName} (for example admin@${domainName}).`;
+            }
+            if (emailError) {
+                emailError.textContent = '';
+                emailError.setAttribute('hidden', 'hidden');
+            }
+
+            const isAlreadyVerified = ownershipStatus === 'verified';
+            if (verifyDnsBtn) verifyDnsBtn.disabled = isAlreadyVerified;
+            if (verifyEmailBtn) verifyEmailBtn.disabled = isAlreadyVerified;
+            if (successBox) {
+                if (isAlreadyVerified) {
+                    const viaText = ownershipVia ? ` via ${ownershipVia.toUpperCase()}` : '';
+                    if (successText) successText.textContent = `Ownership verification already completed${viaText}.`;
+                    successBox.removeAttribute('hidden');
+                } else {
+                    successBox.setAttribute('hidden', 'hidden');
+                }
+            }
+
+            openModal('onb-verification-modal');
+        });
+    });
+
+    document.querySelectorAll('.onb-open-auth').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const domainId = btn.getAttribute('data-domain-id') || '';
+            const domainName = btn.getAttribute('data-domain-name') || '';
+            const source = document.getElementById(`onb-auth-source-${domainId}`);
+            const body = document.getElementById('onb-auth-body');
+            const title = document.getElementById('onb-auth-title');
+
+            if (title) title.textContent = `Authentication records for ${domainName}`;
+            if (body) body.innerHTML = source ? source.innerHTML : '<p class="onb-text-muted">No records available.</p>';
+
+            if (body) {
+                body.querySelectorAll('.onb-auth-acc-toggle').forEach((toggle) => {
+                    toggle.addEventListener('click', () => {
+                        const section = toggle.closest('.onb-auth-section');
+                        if (!section) return;
+                        const panel = section.querySelector('.onb-auth-section-body');
+                        if (!panel) return;
+                        const isOpen = !panel.hasAttribute('hidden');
+                        panel.toggleAttribute('hidden', isOpen);
+                        section.classList.toggle('is-open', !isOpen);
+                        toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+                    });
+                });
+            }
+
+            openModal('onb-auth-modal');
+        });
+    });
+
+    document.querySelectorAll('.onb-tab').forEach((tabBtn) => {
+        tabBtn.addEventListener('click', () => {
+            const targetId = tabBtn.getAttribute('data-tab-target');
+            if (!targetId) return;
+
+            document.querySelectorAll('.onb-tab').forEach((item) => item.classList.remove('is-active'));
+            document.querySelectorAll('.onb-tab-panel').forEach((panel) => panel.classList.remove('is-active'));
+
+            tabBtn.classList.add('is-active');
+            const panel = document.getElementById(targetId);
+            if (panel) panel.classList.add('is-active');
+        });
+    });
+
+    const verifyOwnershipDnsBtn = document.getElementById('onb-verify-ownership-dns-btn');
+    if (verifyOwnershipDnsBtn) {
+        verifyOwnershipDnsBtn.addEventListener('click', async () => {
+            const domainRowId = verifyOwnershipDnsBtn.getAttribute('data-domain-id') || '';
+            try {
+                const result = await submitStepForm(2, 'verify_ownership_dns', {
+                    domain_id: domainRowId
+                });
+
+                if (!result.success) {
+                    showOnboardingError(result.error || 'Unable to verify domain ownership');
+                    return;
+                }
+
+                const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+            } catch (err) {
+                showOnboardingError('Failed to verify domain ownership: ' + err.message);
+            }
+        });
+    }
+
+    const verifyOwnershipEmailBtn = document.getElementById('onb-verify-ownership-email-btn');
+    if (verifyOwnershipEmailBtn) {
+        verifyOwnershipEmailBtn.addEventListener('click', async () => {
+            const domainRowId = verifyOwnershipEmailBtn.getAttribute('data-domain-id') || '';
+            const emailInput = document.getElementById('onb-own-email-input');
+            const emailError = document.getElementById('onb-own-email-error');
+            const domainName = (emailInput?.getAttribute('data-domain-name') || '').trim().toLowerCase();
+            const rawEmail = (emailInput?.value || '').trim();
+
+            if (emailError) {
+                emailError.textContent = '';
+                emailError.setAttribute('hidden', 'hidden');
+            }
+
+            const match = rawEmail.match(/^[^@\s]+@([^@\s]+)$/);
+            if (!match) {
+                if (emailError) {
+                    emailError.textContent = 'Please enter a valid email address.';
+                    emailError.removeAttribute('hidden');
+                }
+                return;
+            }
+
+            const emailDomain = (match[1] || '').trim().toLowerCase();
+            if (emailDomain !== domainName) {
+                if (emailError) {
+                    emailError.textContent = `This email must belong to the domain being verified: ${domainName}`;
+                    emailError.removeAttribute('hidden');
+                }
+                return;
+            }
+
+            try {
+                const result = await submitStepForm(2, 'verify_ownership_email', {
+                    domain_id: domainRowId,
+                    ownership_email: rawEmail,
+                });
+
+                if (!result.success) {
+                    if (emailError) {
+                        emailError.textContent = result.error || 'Unable to verify ownership by email.';
+                        emailError.removeAttribute('hidden');
+                    } else {
+                        showOnboardingError(result.error || 'Unable to verify ownership by email.');
+                    }
+                    return;
+                }
+
+                const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+            } catch (err) {
+                if (emailError) {
+                    emailError.textContent = 'Failed to verify ownership by email.';
+                    emailError.removeAttribute('hidden');
+                }
+            }
+        });
+    }
+
+    document.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const copyBtn = target.closest('.onb-copy');
+        if (copyBtn) {
+            const targetId = copyBtn.getAttribute('data-copy-target');
+            const copyTarget = targetId ? document.getElementById(targetId) : null;
+            if (!copyTarget) {
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(copyTarget.textContent || '');
+                const oldText = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                copyBtn.classList.add('copied');
+                setTimeout(() => {
+                    copyBtn.textContent = oldText;
+                    copyBtn.classList.remove('copied');
+                }, 1200);
+            } catch (err) {
+                showOnboardingError('Failed to copy record value');
+            }
+            return;
+        }
+
+        const modalAction = target.closest('.onb-modal-step2-action');
+        if (modalAction) {
+            const actionValue = modalAction.getAttribute('data-step2-action') || 'check_dns';
+            const domainRowId = modalAction.getAttribute('data-domain-id') || '';
+            try {
+                const result = await submitStepForm(2, actionValue, {
+                    domain_id: domainRowId
+                });
+
+                if (!result.success) {
+                    showOnboardingError(result.error || 'Unable to process modal action');
+                    return;
+                }
+
+                if (actionValue === 'next' && result.next_step) {
+                    closeModal('onb-auth-modal');
+                    goToStep(result.next_step);
+                    return;
+                }
+
+                const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+            } catch (err) {
+                showOnboardingError('Failed to process modal action: ' + err.message);
+            }
+        }
+    });
+
+    // Generate smart workspace name from company name or domain
+    function generateWorkspaceName(source) {
+        // List of common business suffixes to remove
+        const suffixes = ['inc', 'llc', 'ltd', 'corp', 'co', 'company', 'group', 'solutions', 'labs', 'tech'];
+        
+        // Clean and format the name
+        let name = source
+            .toLowerCase()
+            .replace(/[-_]/g, ' ')  // Replace hyphens/underscores with spaces
+            .replace(/([a-z])([A-Z])/g, '$1 $2')  // Handle camelCase
+            .trim();
+        
+        // Remove common suffixes
+        const words = name.split(/\s+/);
+        const filteredWords = words.filter(word => !suffixes.includes(word.toLowerCase()));
+        
+        // Use filtered words if any remain, otherwise use original
+        const result = filteredWords.length > 0 ? filteredWords.join(' ') : name;
+        
+        // Capitalize each word
+        return result
+            .split(/\s+/)
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+
+    // Auto-fill workspace name from company name or domain
+    function updateWorkspaceName() {
+        const workspaceInput = document.querySelector('input[name="workspace_name"]');
+        const companyNameInput = document.querySelector('input[name="company_name"]');
+        const websiteInput = document.querySelector('input[name="company_website"]');
+
+        // Priority: use company_name if available, otherwise extract from website
+        if (companyNameInput && companyNameInput.value.trim()) {
+            workspaceInput.value = generateWorkspaceName(companyNameInput.value.trim());
+        } else if (websiteInput && websiteInput.value.trim()) {
+            // Extract domain name from URL
+            try {
+                const domain = new URL(websiteInput.value).hostname;
+                // Remove www. prefix and extract main domain name
+                const cleaned = domain.replace(/^www\./, '');
+                const mainName = cleaned.split('.')[0];
+                workspaceInput.value = generateWorkspaceName(mainName);
+            } catch (e) {
+                // Invalid URL, skip
+            }
+        }
+    }
+
+    // Listen to company_name changes
+    const companyNameInput = document.querySelector('input[name="company_name"]');
+    if (companyNameInput) {
+        companyNameInput.addEventListener('input', updateWorkspaceName);
+        companyNameInput.addEventListener('blur', updateWorkspaceName);
+    }
+
+    // Listen to website changes
+    const websiteInput = document.querySelector('input[name="company_website"]');
+    if (websiteInput) {
+        websiteInput.addEventListener('input', updateWorkspaceName);
+        websiteInput.addEventListener('blur', updateWorkspaceName);
+    }
+
+    // Initialize workspace name on page load
+    updateWorkspaceName();
+
+    // Auto-fill sender_email based on company domain
+    function initSenderEmail() {
+        const senderEmailInput = document.querySelector('input[name="sender_email"]');
+        const companyDomain = '{{ company_domain or "" }}'.trim();
+        
+        if (senderEmailInput && companyDomain && !senderEmailInput.value) {
+            senderEmailInput.placeholder = `hello@${companyDomain}`;
+        }
+    }
+    
+    // Initialize sender email on page load
+    initSenderEmail();
+
+    // Start from requested step
+    goToStep(initialStep);
+})();
+</script>
+{% endblock %}

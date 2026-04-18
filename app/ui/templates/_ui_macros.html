@@ -2,6 +2,62 @@
 <span class="chip chip-status status-{{ status_code|default('unknown') }}">{{ status_text }}</span>
 {%- endmacro %}
 
+{% macro page_header(title, subtitle='', cta_href='', cta_text='') -%}
+<section class="page-header card">
+    <div class="page-header-main">
+        <h2>{{ title }}</h2>
+        {% if subtitle %}<p class="muted">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if cta_href and cta_text %}
+    <div class="page-header-actions">
+        <a class="btn-primary" href="{{ cta_href }}">{{ cta_text }}</a>
+    </div>
+    {% endif %}
+</section>
+{%- endmacro %}
+
+{% macro stat_card(label, value, note='', tone='default') -%}
+<article class="card stat-card stat-{{ tone|default('default') }}">
+    <p class="stat-label">{{ label }}</p>
+    <div class="stat-value">{{ value }}</div>
+    {% if note %}<p class="stat-note">{{ note }}</p>{% endif %}
+</article>
+{%- endmacro %}
+
+{% macro action_card(icon='AI', title='', text='', primary_href='', primary_text='Open', secondary_href='', secondary_text='Learn more') -%}
+<article class="card action-card-pro">
+    <div class="action-icon" aria-hidden="true">{{ icon }}</div>
+    <h4>{{ title }}</h4>
+    <p>{{ text }}</p>
+    <div class="row-actions">
+        <a class="btn-primary" href="{{ primary_href }}">{{ primary_text }}</a>
+        {% if secondary_href and secondary_text %}
+        <a class="btn-link" href="{{ secondary_href }}">{{ secondary_text }}</a>
+        {% endif %}
+    </div>
+</article>
+{%- endmacro %}
+
+{% macro table_card(title='', subtitle='') -%}
+<section class="card table-card">
+    <div class="table-card-head">
+        <div>
+            <h3>{{ title }}</h3>
+            {% if subtitle %}<p class="muted small">{{ subtitle }}</p>{% endif %}
+        </div>
+    </div>
+    {{ caller() }}
+</section>
+{%- endmacro %}
+
+{% macro empty_state(title='No data yet', text='Try another filter or start a new action.', cta_href='', cta_text='') -%}
+<div class="empty-state">
+    <strong>{{ title }}</strong>
+    <p class="muted">{{ text }}</p>
+    {% if cta_href and cta_text %}<a class="btn-primary" href="{{ cta_href }}">{{ cta_text }}</a>{% endif %}
+</div>
+{%- endmacro %}
+
 {% macro bool_chip(value, yes_text='Да', no_text='Нет') -%}
 {% if value %}
 <span class="chip chip-yes">{{ yes_text }}</span>
@@ -16,6 +72,17 @@
 
 {% macro relevance_chip(level, label) -%}
 <span class="chip chip-relevance relevance-{{ level|default('maybe') }}">{{ label }}</span>
+{%- endmacro %}
+
+{% macro severity_badge(level, text) -%}
+<span class="event-badge {{ level|default('info') }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro alert_banner(level='info', title='Info', text='') -%}
+<div class="alert-banner alert-{{ level|default('info') }}">
+    <strong>{{ title }}</strong>
+    {% if text %}<p>{{ text }}</p>{% endif %}
+</div>
 {%- endmacro %}
 
 {% macro row_action_menu(company_id) -%}

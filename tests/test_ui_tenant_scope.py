@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.audit_log import AuditLog
 from app.models.company import Company, CompanyStatus
 from app.models.tenant import Tenant
 
@@ -68,12 +69,23 @@ def test_ui_companies_is_scoped_by_tenant_header(monkeypatch):
     client = TestClient(app)
 
     try:
-        response_1 = client.get("/ui/companies", headers={"X-Tenant-Id": str(tenant_1_id)})
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "owner@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Alpha Team",
+            },
+        )
+        assert reg.status_code == 200
+        token = reg.json()["token"]
+
+        response_1 = client.get("/ui/companies", headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": str(tenant_1_id)})
         assert response_1.status_code == 200
         assert "alpha.example" in response_1.text
         assert "beta.example" not in response_1.text
 
-        response_2 = client.get("/ui/companies", headers={"X-Tenant-Id": str(tenant_2_id)})
+        response_2 = client.get("/ui/companies", headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": str(tenant_2_id)})
         assert response_2.status_code == 200
         assert "beta.example" in response_2.text
         assert "alpha.example" not in response_2.text
@@ -101,10 +113,21 @@ def test_ui_company_detail_404_for_other_tenant(monkeypatch):
     client = TestClient(app)
 
     try:
-        own = client.get("/ui/companies/1", headers={"X-Tenant-Id": str(tenant_1_id)})
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "owner2@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Alpha Team 2",
+            },
+        )
+        assert reg.status_code == 200
+        token = reg.json()["token"]
+
+        own = client.get("/ui/companies/1", headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": str(tenant_1_id)})
         assert own.status_code == 200
 
-        denied = client.get("/ui/companies/1", headers={"X-Tenant-Id": str(tenant_2_id)})
+        denied = client.get("/ui/companies/1", headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": str(tenant_2_id)})
         assert denied.status_code == 404
     finally:
         app.dependency_overrides.clear()
@@ -156,6 +179,64 @@ def test_ui_companies_uses_tenant_from_session_token(monkeypatch):
         assert response.status_code == 200
         assert "alpha.example" in response.text
         assert "beta.example" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_ui_operations_auth_audit_is_scoped_by_tenant_header(monkeypatch):
+    db = _build_test_session()
+    tenant_1_id, tenant_2_id = _seed(db)
+
+    def _override_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    class _FakeConnectivity:
+        smtp_ok = True
+        imap_ok = True
+
+    db.add(
+        AuditLog(
+            entity_type="auth",
+            tenant_id=tenant_1_id,
+            action="auth_login_success",
+            details={"email": "alpha@example.com"},
+        )
+    )
+    db.add(
+        AuditLog(
+            entity_type="auth",
+            tenant_id=tenant_2_id,
+            action="auth_logout_all",
+            details={"email": "beta@example.com"},
+        )
+    )
+    db.commit()
+
+    monkeypatch.setattr("app.ui.routes.check_zone_connectivity", lambda: _FakeConnectivity())
+    app.dependency_overrides[get_db] = _override_db
+    client = TestClient(app)
+
+    try:
+        reg = client.post(
+            "/api/auth/register",
+            json={
+                "email": "owner3@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Alpha Team 3",
+            },
+        )
+        assert reg.status_code == 200
+        token = reg.json()["token"]
+
+        response = client.get("/ui/operations", headers={"Authorization": f"Bearer {token}", "X-Tenant-Id": str(tenant_1_id)})
+        assert response.status_code == 200
+        assert "auth_login_success" in response.text
+        assert "alpha@example.com" in response.text
+        assert "beta@example.com" not in response.text
     finally:
         app.dependency_overrides.clear()
         db.close()

@@ -5,7 +5,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8)
     full_name: str | None = None
-    tenant_name: str = Field(min_length=2, max_length=255)
+    tenant_name: str | None = Field(default=None, min_length=2, max_length=255)
 
 
 class LoginRequest(BaseModel):

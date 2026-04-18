@@ -1,7 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-    <h3>Сводка кампании</h3>
+    <h3>Campaign overview</h3>
+    <div class="prep-status-grid">
+        <div class="prep-step done"><span>Step 1</span><strong>Audience</strong></div>
+        <div class="prep-step done"><span>Step 2</span><strong>Validation</strong></div>
+        <div class="prep-step {% if campaign.status in ['draft', 'prepared'] %}pending{% else %}done{% endif %}"><span>Step 3</span><strong>Template</strong></div>
+        <div class="prep-step {% if campaign.status in ['active', 'completed', 'replied'] %}done{% else %}pending{% endif %}"><span>Step 4</span><strong>Send</strong></div>
+    </div>
+
+    <div class="companies-summary-strip top-gap">
+        <div class="summary-pill">
+            <span>Status</span>
+            <strong>{{ campaign.status }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Has reply</span>
+            <strong>{{ campaign.has_reply }}</strong>
+        </div>
+        <div class="summary-pill">
+            <span>Language</span>
+            <strong>{{ campaign.language or '-' }}</strong>
+        </div>
+        <div class="summary-pill {% if campaign.status == 'failed' %}summary-pill-risk{% endif %}">
+            <span>Health</span>
+            <strong>{% if campaign.status == 'failed' %}Needs attention{% else %}Stable{% endif %}</strong>
+        </div>
+    </div>
+
     <div class="details-grid">
         <div><strong>ID:</strong> {{ campaign.id }}</div>
         <div><strong>Компания:</strong> <a href="/ui/companies/{{ company.id }}">{{ company.name or company.domain }}</a></div>
@@ -11,16 +37,21 @@
         <div><strong>Шаг:</strong> {{ campaign.step }}</div>
         <div><strong>Есть ответ:</strong> {{ campaign.has_reply }}</div>
     </div>
-    <div class="top-gap"><strong>Brief:</strong><pre>{{ campaign.brief or '-' }}</pre></div>
+
+    <div class="top-gap">
+        <strong>Brief / template context:</strong>
+        <pre>{{ campaign.brief or '-' }}</pre>
+    </div>
+
     <div class="row-actions top-gap">
-        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Отправить сейчас</button></form>
-        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Остановить кампанию</button></form>
+        <form method="post" action="/ui/campaigns/{{ campaign.id }}/send-now"><button type="submit">Send now</button></form>
+        <form method="post" action="/ui/campaigns/{{ campaign.id }}/stop"><button type="submit">Pause campaign</button></form>
         <form method="post" action="/ui/campaigns/{{ campaign.id }}/mark-replied"><button type="submit">Отметить как replied</button></form>
     </div>
 </section>
 
 <section class="card">
-    <h3>Хронология сообщений</h3>
+    <h3>Message timeline</h3>
     <table>
         <thead><tr><th>Направление</th><th>Тема</th><th>Превью тела</th><th>Шаг</th><th>Отправлено</th><th>Получено</th></tr></thead>
         <tbody>
@@ -40,7 +71,7 @@
 
 <section class="split-2">
     <article class="card">
-        <h3>Расписания</h3>
+        <h3>Schedules / queue</h3>
         <table>
             <thead><tr><th>ID</th><th>Задача</th><th>Шаг</th><th>Выполнить в</th><th>Исполнено</th></tr></thead>
             <tbody>
@@ -51,7 +82,7 @@
         </table>
     </article>
     <article class="card">
-        <h3>Передачи</h3>
+        <h3>Handoffs</h3>
         <table>
             <thead><tr><th>ID</th><th>Label</th><th>Приоритет</th><th>Статус</th><th>Summary</th><th>Создана</th></tr></thead>
             <tbody>

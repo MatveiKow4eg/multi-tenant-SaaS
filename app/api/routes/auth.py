@@ -45,22 +45,37 @@ def _audit_auth_event(
     *,
     action: str,
     user_id: int | None = None,
+    tenant_id: int | None = None,
     reason: str | None = None,
     details: dict | None = None,
 ) -> None:
     try:
+        payload = dict(details or {})
+        if tenant_id is not None:
+            payload.setdefault("tenant_id", tenant_id)
         db.add(
             AuditLog(
                 entity_type="auth",
                 entity_id=user_id,
+                tenant_id=tenant_id,
                 action=action,
-                details=details,
+                details=payload or None,
                 reason=reason,
             )
         )
         db.commit()
     except Exception:
         db.rollback()
+
+
+def _primary_tenant_id(db: Session, user_id: int) -> int | None:
+    row = (
+        db.query(TenantMembership.tenant_id)
+        .filter(TenantMembership.user_id == user_id, TenantMembership.status == "active")
+        .order_by(TenantMembership.id.asc())
+        .first()
+    )
+    return row[0] if row else None
 
 
 def _slugify(text: str) -> str:
@@ -94,8 +109,13 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     if existing_user:
         raise HTTPException(status_code=409, detail="email_already_exists")
 
-    base_slug = _slugify(payload.tenant_name)
-    tenant = Tenant(name=payload.tenant_name.strip(), slug=_ensure_unique_slug(db, base_slug))
+    requested_tenant_name = (payload.tenant_name or "").strip()
+    if not requested_tenant_name:
+        local_part = payload.email.split("@", 1)[0] if "@" in payload.email else "workspace"
+        requested_tenant_name = f"{local_part}-workspace"
+
+    base_slug = _slugify(requested_tenant_name)
+    tenant = Tenant(name=requested_tenant_name, slug=_ensure_unique_slug(db, base_slug))
     db.add(tenant)
     db.flush()
 
@@ -140,16 +160,20 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 @router.post("/login", response_model=AuthSessionRead)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> AuthSessionRead:
     normalized_email = payload.email.lower().strip()
+    user = db.query(User).filter(User.email == normalized_email).first()
+    primary_tenant_id = _primary_tenant_id(db, user.id) if user else None
+
     if not is_login_allowed(email=normalized_email):
         _audit_auth_event(
             db,
             action="auth_login_blocked",
+            user_id=user.id if user else None,
+            tenant_id=primary_tenant_id,
             reason="login_temporarily_locked",
             details={"email": normalized_email},
         )
         raise HTTPException(status_code=429, detail="login_temporarily_locked")
 
-    user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(payload.password, user.password_hash):
         locked_now = register_login_failure(
             email=normalized_email,
@@ -161,6 +185,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             _audit_auth_event(
                 db,
                 action="auth_login_blocked",
+                user_id=user.id if user else None,
+                tenant_id=primary_tenant_id,
                 reason="login_lock_threshold_reached",
                 details={"email": normalized_email},
             )
@@ -168,6 +194,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         _audit_auth_event(
             db,
             action="auth_login_failed",
+            user_id=user.id if user else None,
+            tenant_id=primary_tenant_id,
             reason="invalid_credentials",
             details={"email": normalized_email},
         )
@@ -179,6 +207,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             db,
             action="auth_login_denied",
             user_id=user.id,
+            tenant_id=primary_tenant_id,
             reason="user_inactive",
             details={"email": normalized_email},
         )
@@ -188,6 +217,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             db,
             action="auth_login_denied",
             user_id=user.id,
+            tenant_id=primary_tenant_id,
             reason="email_not_verified",
             details={"email": normalized_email},
         )
@@ -205,6 +235,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             db,
             action="auth_login_denied",
             user_id=user.id,
+            tenant_id=primary_tenant_id,
             reason="membership_not_found_or_ambiguous",
             details={"email": normalized_email},
         )
@@ -221,7 +252,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         db,
         action="auth_login_success",
         user_id=user.id,
-        details={"tenant_id": membership.tenant_id, "email": normalized_email},
+        tenant_id=membership.tenant_id,
+        details={"email": normalized_email},
     )
     return AuthSessionRead(
         token=token,
@@ -281,7 +313,7 @@ def logout(
         db,
         action="auth_logout",
         user_id=session.user_id,
-        details={"tenant_id": session.tenant_id},
+        tenant_id=session.tenant_id,
     )
     return {"ok": True}
 
@@ -307,7 +339,8 @@ def logout_all(
         db,
         action="auth_logout_all",
         user_id=session.user_id,
-        details={"revoked": revoked, "tenant_id": session.tenant_id},
+        tenant_id=session.tenant_id,
+        details={"revoked": revoked},
     )
     return {"ok": True, "revoked": revoked}
 
@@ -375,6 +408,13 @@ def accept_invite(
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
+    _audit_auth_event(
+        db,
+        action="auth_invite_accepted",
+        user_id=user.id,
+        tenant_id=invite.tenant_id,
+        details={"email": user.email, "invite_id": invite.id},
+    )
     return AuthSessionRead(
         token=token,
         tenant_id=invite.tenant_id,
@@ -393,6 +433,13 @@ def verify_email(token: str, db: Session = Depends(get_db)) -> dict[str, bool]:
         raise HTTPException(status_code=404, detail="user_not_found")
     user.email_verified = True
     db.commit()
+    _audit_auth_event(
+        db,
+        action="auth_email_verified",
+        user_id=user.id,
+        tenant_id=_primary_tenant_id(db, user.id),
+        details={"email": user.email},
+    )
     return {"ok": True}
 
 
@@ -404,18 +451,26 @@ def resend_verification(
     normalized_email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == normalized_email).first()
     sent = False
+    tenant_id = _primary_tenant_id(db, user.id) if user else None
     if user and not user.email_verified and user.is_active:
-        raw_token = create_email_token(db, user_id=user.id, purpose="verify_email")
-        verify_url = f"{settings.app_public_base_url}/ui/verify-email?token={raw_token}"
-        try:
-            send_verification_email(to_email=user.email, verify_url=verify_url)
-            sent = True
-        except Exception:
-            pass
+        can_send = acquire_email_cooldown(
+            purpose="resend-verify",
+            email=normalized_email,
+            ttl_seconds=settings.auth_resend_verification_cooldown_seconds,
+        )
+        if can_send:
+            raw_token = create_email_token(db, user_id=user.id, purpose="verify_email")
+            verify_url = f"{settings.app_public_base_url}/ui/verify-email?token={raw_token}"
+            try:
+                send_verification_email(to_email=user.email, verify_url=verify_url)
+                sent = True
+            except Exception:
+                pass
     _audit_auth_event(
         db,
         action="auth_resend_verification_requested",
         user_id=user.id if user else None,
+        tenant_id=tenant_id,
         details={"email": normalized_email, "sent": sent},
     )
     # Always respond OK to prevent user enumeration
@@ -429,6 +484,7 @@ def forgot_password(
 ) -> dict[str, bool]:
     normalized_email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == normalized_email).first()
+    tenant_id = _primary_tenant_id(db, user.id) if user else None
     sent = False
     if user and user.is_active:
         can_send = acquire_email_cooldown(
@@ -449,6 +505,7 @@ def forgot_password(
         db,
         action="auth_forgot_password_requested",
         user_id=user.id if user else None,
+        tenant_id=tenant_id,
         details={"email": normalized_email, "sent": sent},
     )
     # Always respond OK to prevent user enumeration
@@ -472,6 +529,7 @@ def reset_password(
         db,
         action="auth_password_reset_completed",
         user_id=user.id,
+        tenant_id=_primary_tenant_id(db, user.id),
         details={"email": user.email},
     )
     return {"ok": True}

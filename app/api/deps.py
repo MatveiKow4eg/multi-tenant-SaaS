@@ -6,6 +6,10 @@ from app.db.session import get_db
 from app.services.auth.session_manager import resolve_active_session
 
 
+# Sentinel tenant id that never matches real tenant rows.
+_NO_TENANT_ID = -1
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -29,9 +33,10 @@ def get_tenant_id(
     if token is None and request is not None:
         token = request.cookies.get(settings.auth_session_cookie_name)
     if token is None:
-        return None
+        # Return a non-existent tenant id to avoid accidental global data exposure.
+        return _NO_TENANT_ID
 
     session = resolve_active_session(db, token)
     if session is None:
-        return None
+        return _NO_TENANT_ID
     return session.tenant_id
