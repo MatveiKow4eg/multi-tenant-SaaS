@@ -66,6 +66,7 @@ from app.tasks.replies import ingest_and_classify
 from app.tasks.researcher import run_research_and_qualify
 from app.worker.celery_app import celery_app
 from app.core.config import settings
+from app.core.feature_toggles import parse_feature_toggles
 from app.core.feature_toggles import active_feature_toggles, parse_feature_toggles
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1600,6 +1601,153 @@ def feature_toggles_page(request: Request) -> HTMLResponse:
         "total_count": len(all_toggles),
     }
     return templates.TemplateResponse(request, "feature_toggles.html", context)
+
+
+def _is_feature_enabled(toggle_name: str) -> bool:
+    toggles = parse_feature_toggles(settings.feature_toggles_json)
+    return bool(toggles.get(toggle_name, False))
+
+
+def _delete_companies_with_related_objects(db: Session, company_ids: list[int]) -> int:
+    campaign_ids = [
+        row[0]
+        for row in db.query(Campaign.id)
+        .filter(Campaign.company_id.in_(company_ids))
+        .all()
+    ]
+
+    message_ids: list[int] = []
+    if campaign_ids:
+        message_ids = [
+            row[0]
+            for row in db.query(Message.id)
+            .filter(Message.campaign_id.in_(campaign_ids))
+            .all()
+        ]
+
+    if message_ids:
+        db.query(Reply).filter(Reply.message_id.in_(message_ids)).delete(synchronize_session=False)
+
+    if campaign_ids:
+        db.query(Handoff).filter(Handoff.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+        db.query(Message).filter(Message.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+        db.query(Schedule).filter(Schedule.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+        db.query(Campaign).filter(Campaign.id.in_(campaign_ids)).delete(synchronize_session=False)
+
+    db.query(Handoff).filter(Handoff.company_id.in_(company_ids)).delete(synchronize_session=False)
+    db.query(CompanyPage).filter(CompanyPage.company_id.in_(company_ids)).delete(synchronize_session=False)
+    db.query(Contact).filter(Contact.company_id.in_(company_ids)).delete(synchronize_session=False)
+    return db.query(Company).filter(Company.id.in_(company_ids)).delete(synchronize_session=False)
+
+
+@router.get("/dev-features", response_class=HTMLResponse)
+def dev_features_page(
+    request: Request,
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    delete_users_enabled = _is_feature_enabled("DELETE_USERS")
+    companies_query = _company_query(db, tenant_id).order_by(Company.created_at.desc(), Company.id.desc())
+    companies = companies_query.limit(200).all()
+    context = {
+        **_base_context(request, "Dev Features"),
+        "delete_users_enabled": delete_users_enabled,
+        "delete_company_path": "/ui/dev-features/delete-company",
+        "companies": companies,
+        "company_count": companies_query.count(),
+    }
+    return templates.TemplateResponse(request, "dev_features.html", context)
+
+
+@router.post("/dev-features/delete-company-by-name")
+def dev_features_delete_company_by_name(
+    request: Request,
+    company_name: str = Form(...),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
+    if not _is_feature_enabled("DELETE_USERS"):
+        return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
+
+    clean_name = _trim(company_name)
+    if not clean_name:
+        return _flash_redirect("/ui/dev-features", error="Укажите имя компании")
+
+    target_name = clean_name.lower()
+    companies = (
+        _company_query(db, tenant_id)
+        .filter(func.lower(func.coalesce(Company.name, "")) == target_name)
+        .all()
+    )
+    if not companies:
+        return _flash_redirect("/ui/dev-features", error=f"Компании с именем '{clean_name}' не найдены")
+
+    company_ids = [item.id for item in companies]
+
+    try:
+        deleted_companies = _delete_companies_with_related_objects(db, company_ids)
+        db.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                action="dev_feature_company_deleted_by_name",
+                entity_type="company",
+                details={
+                    "company_name": clean_name,
+                    "deleted_companies": deleted_companies,
+                    "company_ids": company_ids,
+                },
+                reason="DELETE_USERS feature action from dev features page",
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
+
+    return _flash_redirect("/ui/dev-features", message=f"Удалено компаний: {deleted_companies}")
+
+
+@router.post("/dev-features/delete-company")
+def dev_features_delete_company(
+    request: Request,
+    company_id: int = Form(...),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
+    if not _is_feature_enabled("DELETE_USERS"):
+        return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
+
+    company = _company_by_id(db, company_id, tenant_id)
+    if not company:
+        return _flash_redirect("/ui/dev-features", error="Компания не найдена")
+
+    company_name = company.name or company.domain
+    try:
+        deleted_companies = _delete_companies_with_related_objects(db, [company.id])
+        db.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                action="dev_feature_company_deleted",
+                entity_type="company",
+                entity_id=company.id,
+                details={
+                    "company_id": company.id,
+                    "company_name": company_name,
+                    "deleted_companies": deleted_companies,
+                },
+                reason="DELETE_USERS feature action from dev features page",
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
+
+    return _flash_redirect("/ui/dev-features", message=f"Компания удалена: {company_name}")
 
 
 # ---------------------------------------------------------------------------
