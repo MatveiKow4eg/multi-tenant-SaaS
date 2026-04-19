@@ -1870,6 +1870,16 @@ def dev_features_delete_user(
     _, user = member_row
     display_name = (user.full_name or user.email or str(user.id)).strip()
     try:
+        company_ids = [
+            row[0]
+            for row in db.query(Company.id)
+            .filter(Company.tenant_id == effective_tenant_id)
+            .all()
+        ]
+        deleted_companies = 0
+        if company_ids:
+            deleted_companies = _delete_companies_with_related_objects(db, company_ids)
+
         user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, effective_tenant_id, user.id)
         db.add(
             AuditLog(
@@ -1882,6 +1892,8 @@ def dev_features_delete_user(
                     "user_email": user.email,
                     "deleted_memberships": deleted_memberships,
                     "user_deleted": user_deleted,
+                    "deleted_companies": deleted_companies,
+                    "company_ids": company_ids,
                 },
                 reason="DELETE_USERS feature action from dev features page",
             )
@@ -1892,8 +1904,8 @@ def dev_features_delete_user(
         return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
 
     if user_deleted:
-        return _flash_redirect("/ui/dev-features", message=f"Пользователь удален: {display_name}")
-    return _flash_redirect("/ui/dev-features", message=f"Пользователь удален из tenant: {display_name}")
+        return _flash_redirect("/ui/dev-features", message=f"Пользователь удален: {display_name}. Компаний удалено: {deleted_companies}")
+    return _flash_redirect("/ui/dev-features", message=f"Пользователь удален из tenant: {display_name}. Компаний удалено: {deleted_companies}")
 
 
 # ---------------------------------------------------------------------------
