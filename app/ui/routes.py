@@ -70,6 +70,9 @@ from app.worker.celery_app import celery_app
 from app.core.config import settings
 from app.core.feature_toggles import parse_feature_toggles
 from app.core.feature_toggles import active_feature_toggles, parse_feature_toggles
+import logging
+
+logger = logging.getLogger("app.ui.routes")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -631,7 +634,7 @@ def _company_by_id(db: Session, company_id: int, tenant_id: int | None) -> Compa
     return _company_query(db, tenant_id).filter(Company.id == company_id).first()
 
 
-def _tenant_user_rows_query(db: Session, tenant_id: int | None):
+def _tenant_user_rows_query(db: Session, tenant_id: int | None) -> list[User]:
     q = db.query(TenantMembership, User).join(User, User.id == TenantMembership.user_id)
     if tenant_id is not None:
         q = q.filter(TenantMembership.tenant_id == tenant_id)
@@ -1709,6 +1712,8 @@ def dev_features_page(
         "users": user_rows,
         "user_count": user_rows_query.count(),
     }
+
+    logger.info(f"Rendering dev features page with {len(companies)} companies and {len(user_rows)} users for tenant_id={tenant_id}")
     return templates.TemplateResponse(request, "dev_features.html", context)
 
 

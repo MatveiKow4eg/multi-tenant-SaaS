@@ -76,9 +76,8 @@
                     <div class="onb-step2-head">
                         <div>
                             <h3 class="onb-panel-title">Sender Domains</h3>
-                            <p class="onb-panel-subtitle">Add DNS records to verify and authenticate your domain before continuing.</p>
+                            <p class="onb-panel-subtitle">Your sender domain was created automatically from the company website. Add these DNS records to verify and authenticate it before continuing.</p>
                         </div>
-                        <button type="button" class="onb-btn-primary onb-step2-action" data-step2-action="add_domain">Add / Verify Domain</button>
                     </div>
 
                     <form id="step-2-form" class="onb-form" data-step="2">
@@ -90,9 +89,8 @@
 
                     {% if not sender_domains %}
                     <div class="onb-empty-state onb-empty-state-large">
-                        <div class="onb-empty-title">No sending domains yet</div>
-                        <p class="onb-text-muted">Add your domain to generate DNS records.</p>
-                        <button type="button" class="onb-btn-primary onb-step2-action" data-step2-action="add_domain">Add / Verify Domain</button>
+                        <div class="onb-empty-title">Sending domain is not ready yet</div>
+                        <p class="onb-text-muted">Complete step 1 with a valid company website and reopen this step.</p>
                     </div>
                     {% else %}
                     <div class="onb-domain-list">
@@ -188,8 +186,7 @@
                                         </div>
                                         {% else %}
                                         <div class="onb-auth-empty">
-                                            <p>Authentication records have not been generated yet.</p>
-                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                            <p>Authentication records are created automatically for this domain.</p>
                                         </div>
                                         {% endif %}
                                     </div>
@@ -236,8 +233,7 @@
                                         </div>
                                         {% else %}
                                         <div class="onb-auth-empty">
-                                            <p>Authentication records have not been generated yet.</p>
-                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                            <p>Authentication records are created automatically for this domain.</p>
                                         </div>
                                         {% endif %}
                                     </div>
@@ -284,8 +280,7 @@
                                         </div>
                                         {% else %}
                                         <div class="onb-auth-empty">
-                                            <p>Authentication records have not been generated yet.</p>
-                                            <button type="button" class="onb-btn-secondary onb-step2-action" data-step2-action="add_domain">Generate records</button>
+                                            <p>Authentication records are created automatically for this domain.</p>
                                         </div>
                                         {% endif %}
                                     </div>
@@ -387,6 +382,7 @@
             <!-- Navigation -->
             <div class="onb-actions">
                 <button id="btn-back" type="button" class="onb-btn-secondary" style="display: none;">← Back</button>
+                <button id="btn-skip" type="button" class="onb-btn-secondary" style="display: none;">Skip</button>
                 <button id="btn-continue" type="button" class="onb-btn-primary">Continue →</button>
                 <a href="/ui/logout" class="onb-btn-secondary">Sign out</a>
             </div>
@@ -397,9 +393,13 @@
 (function() {
     let currentStep = 1;
     const totalSteps = 3;
+    const AUTO_DNS_INTERVAL_MS = 15000;
     const initialStep = Number('{{ initial_step }}') || 1;
     const btnBack = document.getElementById('btn-back');
+    const btnSkip = document.getElementById('btn-skip');
     const btnContinue = document.getElementById('btn-continue');
+    let autoDnsIntervalId = null;
+    let autoDnsInFlight = false;
 
     // Helper to get cookie value
     function getCookie(name) {
@@ -407,6 +407,55 @@
         const parts = value.split(`; ${name}=`);
         if (parts.length === 2) return parts.pop().split(';').shift();
         return null;
+    }
+
+    function clearOnboardingError() {
+        document.querySelectorAll('.onb-pill-error').forEach(el => el.remove());
+    }
+
+    function getActiveDomainId() {
+        const step2FormDomain = document.querySelector('#step-2-form input[name="domain_id"]');
+        const formDomainId = (step2FormDomain?.value || '').trim();
+        if (formDomainId) return formDomainId;
+
+        const domainActionBtn = document.querySelector('.onb-modal-step2-action[data-domain-id], .onb-open-auth[data-domain-id], .onb-open-verification[data-domain-id]');
+        return (domainActionBtn?.getAttribute('data-domain-id') || '').trim();
+    }
+
+    function stopAutoDnsRefresh() {
+        if (autoDnsIntervalId !== null) {
+            clearInterval(autoDnsIntervalId);
+            autoDnsIntervalId = null;
+        }
+        autoDnsInFlight = false;
+    }
+
+    function startAutoDnsRefresh() {
+        stopAutoDnsRefresh();
+
+        autoDnsIntervalId = setInterval(async () => {
+            if (currentStep !== 2 || document.hidden || autoDnsInFlight) {
+                return;
+            }
+
+            const domainId = getActiveDomainId();
+            if (!domainId) {
+                return;
+            }
+
+            autoDnsInFlight = true;
+            try {
+                const result = await submitStepForm(2, 'check_dns', { domain_id: domainId });
+                if (result && result.success && result.reload) {
+                    const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                    window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+                }
+            } catch (err) {
+                // Keep auto refresh silent; manual button remains available.
+            } finally {
+                autoDnsInFlight = false;
+            }
+        }, AUTO_DNS_INTERVAL_MS);
     }
 
     // Show panel and update stepper
@@ -430,6 +479,15 @@
         // Update button states
         btnBack.style.display = currentStep > 1 ? 'inline-flex' : 'none';
         btnContinue.style.display = currentStep === 2 ? 'none' : 'inline-flex';
+
+        if (btnSkip) {
+            if (currentStep === 1) {
+                btnSkip.style.display = 'none';
+            } else {
+                btnSkip.style.display = 'inline-flex';
+                btnSkip.textContent = currentStep === 2 ? 'Skip step' : 'Skip onboarding';
+            }
+        }
         
         if (currentStep === totalSteps) {
             btnContinue.textContent = 'Finish setup';
@@ -440,17 +498,30 @@
         }
 
         // Clear error
-        document.querySelectorAll('.onb-pill-error').forEach(el => el.remove());
+        clearOnboardingError();
+
+        if (currentStep === 2) {
+            startAutoDnsRefresh();
+        } else {
+            stopAutoDnsRefresh();
+        }
     }
 
     function showOnboardingError(message) {
+        const card = document.querySelector('.onb-card');
+        const stepper = document.querySelector('.onb-steps');
+        if (!card || !stepper) return;
+
+        const existingError = card.querySelector('.onb-pill-error');
+        if (existingError) {
+            existingError.textContent = message;
+            return;
+        }
+
         const errorDiv = document.createElement('div');
         errorDiv.className = 'onb-pill onb-pill-error';
         errorDiv.textContent = message;
-        document.querySelector('.onb-card').insertBefore(
-            errorDiv,
-            document.querySelector('.onb-steps')
-        );
+        card.insertBefore(errorDiv, stepper);
     }
 
     async function submitStepForm(stepNumber, actionValue, extraFields = {}) {
@@ -495,6 +566,53 @@
 
     btnBack.addEventListener('click', () => {
         goToStep(currentStep - 1);
+    });
+
+    if (btnSkip) {
+        btnSkip.addEventListener('click', async () => {
+            try {
+                if (currentStep === 2) {
+                    const result = await submitStepForm(2, 'skip', {
+                        domain_id: getActiveDomainId() || ''
+                    });
+
+                    if (!result.success) {
+                        showOnboardingError(result.error || 'Failed to skip step');
+                        return;
+                    }
+
+                    if (result.reload) {
+                        const domainQuery = result.open_domain_id ? `&domain_id=${result.open_domain_id}` : '';
+                        window.location.href = `/ui/onboarding/start?step=2${domainQuery}`;
+                        return;
+                    }
+
+                    if (result.next_step) {
+                        goToStep(result.next_step);
+                    }
+                    return;
+                }
+
+                if (currentStep === 3) {
+                    const result = await submitStepForm(3, 'skip');
+                    if (!result.success) {
+                        showOnboardingError(result.error || 'Failed to skip onboarding');
+                    }
+                }
+            } catch (err) {
+                showOnboardingError('Failed to skip step: ' + err.message);
+            }
+        });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopAutoDnsRefresh();
+            return;
+        }
+        if (currentStep === 2) {
+            startAutoDnsRefresh();
+        }
     });
 
     btnContinue.addEventListener('click', async () => {

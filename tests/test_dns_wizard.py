@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.services.dns.checker import check_cname, check_dkim_txt, check_dmarc, check_spf
+from app.services.dns.checker import check_cname, check_dkim_txt, check_dmarc, check_spf, check_txt_contains
 from app.services.dns.generator import (
     build_dkim_txt_value,
     build_managed_dkim_target,
@@ -140,6 +140,40 @@ def test_check_dmarc_verified():
         mock.return_value = ["v=DMARC1; p=none; rua=mailto:dmarc@example.com"]
         result = check_dmarc("example.com", "v=DMARC1; p=none")
     assert result.status == "verified"
+
+
+def test_check_txt_contains_uses_public_dns_fallback_for_ownership_token():
+    expected = "lertisento-site-verification=abc123"
+
+    def mock_resolve_txt(name, nameservers=None):
+        if nameservers is None:
+            return ["v=spf1 include:zonemx.eu ~all"]
+        if nameservers == ("1.1.1.1",):
+            return [expected]
+        return []
+
+    with patch("app.services.dns.checker._resolve_txt", side_effect=mock_resolve_txt):
+        result = check_txt_contains("_lertisento-verify.example.com", expected)
+
+    assert result.status == "verified"
+    assert result.actual_value == expected
+
+
+def test_check_cname_uses_public_dns_fallback_for_managed_dkim_target():
+    expected = "sd6-s1.dkim.lertisento.com"
+
+    def mock_resolve_cname(name, nameservers=None):
+        if nameservers is None:
+            return ["sd4-s1.dkim.lertisento.com"]
+        if nameservers == ("1.1.1.1",):
+            return [expected]
+        return []
+
+    with patch("app.services.dns.checker._resolve_cname", side_effect=mock_resolve_cname):
+        result = check_cname("s1._domainkey.example.com", expected)
+
+    assert result.status == "verified"
+    assert result.actual_value == expected
 
 
 # ---------------------------------------------------------------------------
