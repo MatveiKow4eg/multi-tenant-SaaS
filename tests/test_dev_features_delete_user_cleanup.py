@@ -9,6 +9,7 @@ from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.company import Company, CompanyStatus
 from app.models.sender_domain import SenderDomain
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.sender_domains import create_sender_domain_profile
 
@@ -95,10 +96,12 @@ def test_dev_delete_user_also_deletes_companies_and_domains(monkeypatch):
 
         company_after = db.query(Company).filter(Company.tenant_id == tenant_id).all()
         domain_after = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).all()
+        tenant_after = db.query(Tenant).filter(Tenant.id == tenant_id).first()
         user_after = db.query(User).filter(User.id == owner_id).first()
 
         assert company_after == []
         assert domain_after == []
+        assert tenant_after is None
         assert user_after is None
     finally:
         app.dependency_overrides.clear()

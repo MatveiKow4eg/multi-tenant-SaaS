@@ -1720,6 +1720,67 @@ def _delete_user_for_tenant_scope(db: Session, tenant_id: int, user_id: int) -> 
     return user_deleted, deleted_memberships
 
 
+def _delete_user_if_orphaned(db: Session, user_id: int) -> bool:
+    membership_count = (
+        db.query(func.count(TenantMembership.id))
+        .filter(TenantMembership.user_id == user_id)
+        .scalar()
+        or 0
+    )
+    if membership_count > 0:
+        return False
+
+    db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    db.query(EmailToken).filter(EmailToken.user_id == user_id).delete(synchronize_session=False)
+    db.query(TenantInvite).filter(TenantInvite.invited_by_user_id == user_id).delete(synchronize_session=False)
+    db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+    return True
+
+
+def _delete_tenant_with_related_objects(db: Session, tenant_id: int) -> dict[str, int]:
+    company_ids = [
+        row[0]
+        for row in db.query(Company.id)
+        .filter(Company.tenant_id == tenant_id)
+        .all()
+    ]
+    deleted_companies = 0
+    if company_ids:
+        deleted_companies = _delete_companies_with_related_objects(db, company_ids)
+
+    # Remove any sender domains that are not tied to company rows.
+    deleted_domains = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).delete(synchronize_session=False)
+
+    user_ids_in_tenant = [
+        row[0]
+        for row in db.query(TenantMembership.user_id)
+        .filter(TenantMembership.tenant_id == tenant_id)
+        .all()
+    ]
+
+    db.query(UserSession).filter(UserSession.tenant_id == tenant_id).delete(synchronize_session=False)
+    db.query(TenantInvite).filter(TenantInvite.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_memberships = db.query(TenantMembership).filter(TenantMembership.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_audit_logs = db.query(AuditLog).filter(AuditLog.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_tenants = db.query(Tenant).filter(Tenant.id == tenant_id).delete(synchronize_session=False)
+
+    deleted_users = 0
+    for uid in set(user_ids_in_tenant):
+        if _delete_user_if_orphaned(db, uid):
+            deleted_users += 1
+
+    return {
+        "deleted_companies": deleted_companies,
+        "deleted_domains": deleted_domains,
+        "deleted_memberships": deleted_memberships,
+        "deleted_audit_logs": deleted_audit_logs,
+        "deleted_tenants": deleted_tenants,
+        "deleted_users": deleted_users,
+        "company_count": len(company_ids),
+        "member_count": len(set(user_ids_in_tenant)),
+    }
+
+
 @router.get("/dev-features", response_class=HTMLResponse)
 def dev_features_page(
     request: Request,
@@ -1868,32 +1929,29 @@ def dev_features_delete_user(
         return _flash_redirect("/ui/dev-features", error="Пользователь не найден в указанном tenant")
 
     _, user = member_row
+    user_id_value = user.id
+    user_email_value = user.email
     display_name = (user.full_name or user.email or str(user.id)).strip()
     try:
-        company_ids = [
-            row[0]
-            for row in db.query(Company.id)
-            .filter(Company.tenant_id == effective_tenant_id)
-            .all()
-        ]
-        deleted_companies = 0
-        if company_ids:
-            deleted_companies = _delete_companies_with_related_objects(db, company_ids)
-
-        user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, effective_tenant_id, user.id)
+        tenant_delete_result = _delete_tenant_with_related_objects(db, effective_tenant_id)
+        forced_user_deleted = _delete_user_if_orphaned(db, user_id_value)
         db.add(
             AuditLog(
                 tenant_id=effective_tenant_id,
                 action="dev_feature_user_deleted",
                 entity_type="user",
-                entity_id=user.id,
+                entity_id=user_id_value,
                 details={
-                    "user_id": user.id,
-                    "user_email": user.email,
-                    "deleted_memberships": deleted_memberships,
-                    "user_deleted": user_deleted,
-                    "deleted_companies": deleted_companies,
-                    "company_ids": company_ids,
+                    "user_id": user_id_value,
+                    "user_email": user_email_value,
+                    "tenant_deleted": tenant_delete_result.get("deleted_tenants", 0) > 0,
+                    "deleted_tenants": tenant_delete_result.get("deleted_tenants", 0),
+                    "deleted_companies": tenant_delete_result.get("deleted_companies", 0),
+                    "deleted_domains": tenant_delete_result.get("deleted_domains", 0),
+                    "deleted_memberships": tenant_delete_result.get("deleted_memberships", 0),
+                    "deleted_audit_logs": tenant_delete_result.get("deleted_audit_logs", 0),
+                    "deleted_users": tenant_delete_result.get("deleted_users", 0),
+                    "force_deleted_selected_user": forced_user_deleted,
                 },
                 reason="DELETE_USERS feature action from dev features page",
             )
@@ -1903,9 +1961,15 @@ def dev_features_delete_user(
         db.rollback()
         return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
 
-    if user_deleted:
-        return _flash_redirect("/ui/dev-features", message=f"Пользователь удален: {display_name}. Компаний удалено: {deleted_companies}")
-    return _flash_redirect("/ui/dev-features", message=f"Пользователь удален из tenant: {display_name}. Компаний удалено: {deleted_companies}")
+    return _flash_redirect(
+        "/ui/dev-features",
+        message=(
+            f"Пользователь удален: {display_name}. "
+            f"Tenant удален: {tenant_delete_result.get('deleted_tenants', 0)}. "
+            f"Компаний удалено: {tenant_delete_result.get('deleted_companies', 0)}. "
+            f"Доменов удалено: {tenant_delete_result.get('deleted_domains', 0)}."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
