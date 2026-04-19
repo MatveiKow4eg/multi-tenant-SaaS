@@ -42,6 +42,7 @@ from app.services.sender_domains import (
     mark_sender_domain_ownership_email_verified,
     normalize_domain,
     rotate_dkim,
+    sync_sender_domain_profile,
     verify_sender_domain,
     verify_sender_domain_ownership_dns,
 )
@@ -3596,41 +3597,23 @@ def onboarding_start_submit(
         if not workspace_name.strip():
             workspace_name = _trim(company_name) or domain.split('.')[0].title()
 
-        sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).order_by(SenderDomain.id.asc()).first()
-        if sender_domain is not None and sender_domain.domain != domain:
-            logger.error(
-                "Onboarding step=1 failed: sender domain mismatch tenant_id=%s existing_domain=%s requested_domain=%s",
-                tenant_id,
-                sender_domain.domain,
-                domain,
-            )
-            return {
-                "success": False,
-                "error": (
-                    "Для workspace уже настроен другой sender domain. "
-                    "Измените его в DNS Wizard (/ui/domains)."
-                ),
-            }
-
-        if sender_domain is None:
-            try:
-                sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain)
+        try:
+            sender_domain, profile_changed = sync_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain)
+            if profile_changed:
                 logger.info(
-                    "Onboarding step=1: sender domain profile auto-created tenant_id=%s sender_domain_id=%s domain=%s",
+                    "Onboarding step=1: sender domain profile synced tenant_id=%s sender_domain_id=%s domain=%s",
                     tenant_id,
                     sender_domain.id,
                     sender_domain.domain,
                 )
-            except ValueError as exc:
-                logger.error(
-                    "Onboarding step=1 failed: auto-create sender domain error tenant_id=%s domain=%s error=%s",
-                    tenant_id,
-                    domain,
-                    str(exc),
-                )
-                return {"success": False, "error": str(exc)}
-        else:
-            ensure_ownership_token(sender_domain)
+        except ValueError as exc:
+            logger.error(
+                "Onboarding step=1 failed: sender domain sync error tenant_id=%s domain=%s error=%s",
+                tenant_id,
+                domain,
+                str(exc),
+            )
+            return {"success": False, "error": str(exc)}
 
         tenant.name = workspace_name.strip() or tenant.name
 
@@ -3650,7 +3633,12 @@ def onboarding_start_submit(
         db.commit()
         logger.info("Onboarding step=1 completed: company saved tenant_id=%s domain=%s", tenant_id, domain)
 
-        return {"success": True, "next_step": 2, "reload": True}
+        return {
+            "success": True,
+            "next_step": 2,
+            "reload": True,
+            "open_domain_id": sender_domain.id,
+        }
 
     # Step 2: Sender domain management with explicit actions.
     if step == 2:

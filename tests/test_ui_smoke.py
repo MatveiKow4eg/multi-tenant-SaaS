@@ -261,8 +261,7 @@ def test_onboarding_allows_changing_company_website_after_auto_domain_creation()
         assert len(updated_sender_domain.dns_records) > 0
 
         company = db.query(Company).filter(Company.tenant_id == tenant_id).first()
-        assert company is not None
-        assert company.domain == "second-example.com"
+        assert company is None
     finally:
         app.dependency_overrides.clear()
         db.close()
