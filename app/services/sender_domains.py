@@ -106,6 +106,30 @@ def mark_sender_domain_ownership_email_verified(sender_domain: SenderDomain, ema
     recompute_ownership_status(sender_domain)
 
 
+def _initialize_sender_domain_profile(db: Session, sender_domain: SenderDomain) -> None:
+    ensure_ownership_token(sender_domain)
+
+    db.add(SenderDomainDnsRecord(
+        sender_domain_id=sender_domain.id,
+        purpose="spf",
+        record_type="TXT",
+        host="@",
+        value=build_spf_value(),
+    ))
+    db.add(SenderDomainDnsRecord(
+        sender_domain_id=sender_domain.id,
+        purpose="dmarc",
+        record_type="TXT",
+        host="_dmarc",
+        value=build_dmarc_value(),
+    ))
+
+    if sender_domain.dkim_mode == "cname":
+        _create_managed_dkim_records(db, sender_domain)
+    else:
+        _create_txt_dkim_record(db, sender_domain, selector="default")
+
+
 def create_sender_domain_profile(db: Session, tenant_id: int, domain: str) -> SenderDomain:
     domain = normalize_domain(domain)
     any_domain = (
@@ -137,29 +161,58 @@ def create_sender_domain_profile(db: Session, tenant_id: int, domain: str) -> Se
     )
     db.add(sender_domain)
     db.flush()
-    ensure_ownership_token(sender_domain)
-
-    db.add(SenderDomainDnsRecord(
-        sender_domain_id=sender_domain.id,
-        purpose="spf",
-        record_type="TXT",
-        host="@",
-        value=build_spf_value(),
-    ))
-    db.add(SenderDomainDnsRecord(
-        sender_domain_id=sender_domain.id,
-        purpose="dmarc",
-        record_type="TXT",
-        host="_dmarc",
-        value=build_dmarc_value(),
-    ))
-
-    if sender_domain.dkim_mode == "cname":
-        _create_managed_dkim_records(db, sender_domain)
-    else:
-        _create_txt_dkim_record(db, sender_domain, selector="default")
+    _initialize_sender_domain_profile(db, sender_domain)
 
     return sender_domain
+
+
+def sync_sender_domain_profile(db: Session, tenant_id: int, domain: str) -> tuple[SenderDomain, bool]:
+    domain = normalize_domain(domain)
+    sender_domain = (
+        db.query(SenderDomain)
+        .filter(SenderDomain.tenant_id == tenant_id)
+        .order_by(SenderDomain.id.asc())
+        .first()
+    )
+    if sender_domain is None:
+        return create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain), True
+
+    domain_changed = sender_domain.domain != domain
+    if domain_changed:
+        db.query(ManagedDkimSelector).filter(ManagedDkimSelector.sender_domain_id == sender_domain.id).delete(synchronize_session=False)
+        db.query(DkimKeyPair).filter(DkimKeyPair.sender_domain_id == sender_domain.id).delete(synchronize_session=False)
+        db.query(SenderDomainDnsRecord).filter(SenderDomainDnsRecord.sender_domain_id == sender_domain.id).delete(synchronize_session=False)
+
+        sender_domain.domain = domain
+        sender_domain.ownership_status = "pending"
+        sender_domain.ownership_method = "dns"
+        sender_domain.ownership_verified_via = None
+        sender_domain.ownership_email_status = "pending"
+        sender_domain.ownership_dns_status = "pending"
+        sender_domain.ownership_email = None
+        sender_domain.ownership_token = None
+        sender_domain.ownership_host = "_lertisento-verify"
+        sender_domain.ownership_verified_at = None
+        sender_domain.ownership_email_verified_at = None
+        sender_domain.ownership_dns_verified_at = None
+        sender_domain.ownership_last_checked_at = None
+        sender_domain.status = "pending"
+        sender_domain.spf_status = "pending"
+        sender_domain.dkim_status = "pending"
+        sender_domain.dmarc_status = "pending"
+        sender_domain.send_enabled = False
+        sender_domain.verified_at = None
+        sender_domain.last_checked_at = None
+        sender_domain.updated_at = datetime.now(timezone.utc)
+        _initialize_sender_domain_profile(db, sender_domain)
+        return sender_domain, True
+
+    ensure_ownership_token(sender_domain)
+    if not sender_domain.dns_records:
+        sender_domain.updated_at = datetime.now(timezone.utc)
+        _initialize_sender_domain_profile(db, sender_domain)
+        return sender_domain, True
+    return sender_domain, False
 
 
 def _create_txt_dkim_record(db: Session, sender_domain: SenderDomain, selector: str) -> None:

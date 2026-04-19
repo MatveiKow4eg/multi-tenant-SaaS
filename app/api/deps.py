@@ -26,6 +26,27 @@ def get_tenant_id(
     request: Request = None,
     db: Session = Depends(get_db),
 ) -> int | None:
+    is_ui_request = bool(request is not None and (request.url.path == "/ui" or request.url.path.startswith("/ui/")))
+
+    if is_ui_request:
+        bearer_token = _extract_bearer_token(authorization)
+        token = bearer_token
+        if token is None and request is not None:
+            token = request.cookies.get(settings.auth_session_cookie_name)
+        if token is None:
+            return _NO_TENANT_ID
+
+        session = resolve_active_session(db, token)
+        if session is None:
+            return _NO_TENANT_ID
+
+        # For browser UI requests (cookie auth), ignore tenant header to prevent
+        # stale header values from causing tenant mismatch and redirect loops.
+        # For explicit bearer-auth requests, preserve legacy override behavior.
+        if bearer_token is not None and x_tenant_id is not None:
+            return x_tenant_id
+        return session.tenant_id
+
     if x_tenant_id is not None:
         return x_tenant_id
 

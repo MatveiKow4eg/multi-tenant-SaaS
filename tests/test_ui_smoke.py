@@ -13,6 +13,7 @@ from app.models.company import Company, CompanyStatus
 from app.models.contact import Contact
 from app.models.audit_log import AuditLog
 from app.models.message import Message, MessageDirection
+from app.models.sender_domain import SenderDomain
 
 
 def _build_test_session():
@@ -179,6 +180,89 @@ def test_new_tenant_is_redirected_to_onboarding_until_setup():
 
         onboarding = client.get("/ui/onboarding/start", follow_redirects=False)
         assert onboarding.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        db.close()
+
+
+def test_onboarding_allows_changing_company_website_after_auto_domain_creation():
+    db = _build_test_session()
+
+    def _override_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = _override_db
+    client = TestClient(app)
+
+    try:
+        reg_owner = client.post(
+            "/api/auth/register",
+            json={
+                "email": "change-domain@example.com",
+                "password": "StrongPass123!",
+                "tenant_name": "Change Domain Team",
+            },
+        )
+        assert reg_owner.status_code == 200
+
+        token = reg_owner.json()["token"]
+        tenant_id = reg_owner.json()["tenant_id"]
+        client.cookies.set("auth_session", token)
+
+        onboarding = client.get("/ui/onboarding/start", follow_redirects=False)
+        assert onboarding.status_code == 200
+        csrf_token = client.cookies.get("csrf_token")
+        assert csrf_token
+
+        first_submit = client.post(
+            "/ui/onboarding/start",
+            data={
+                "step": "1",
+                "action": "next",
+                "workspace_name": "Change Domain Team",
+                "company_website": "https://www.first-example.com",
+                "company_name": "First Example",
+                "sender_name": "Owner",
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert first_submit.status_code == 200
+        assert first_submit.json()["success"] is True
+
+        sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).first()
+        assert sender_domain is not None
+        assert sender_domain.domain == "first-example.com"
+
+        second_submit = client.post(
+            "/ui/onboarding/start",
+            data={
+                "step": "1",
+                "action": "next",
+                "workspace_name": "Change Domain Team",
+                "company_website": "https://www.second-example.com",
+                "company_name": "Second Example",
+                "sender_name": "Owner",
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert second_submit.status_code == 200
+        second_payload = second_submit.json()
+        assert second_payload["success"] is True
+        assert second_payload["open_domain_id"] == sender_domain.id
+
+        db.expire_all()
+        updated_sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).first()
+        assert updated_sender_domain is not None
+        assert updated_sender_domain.id == sender_domain.id
+        assert updated_sender_domain.domain == "second-example.com"
+        assert len(updated_sender_domain.dns_records) > 0
+
+        company = db.query(Company).filter(Company.tenant_id == tenant_id).first()
+        assert company is not None
+        assert company.domain == "second-example.com"
     finally:
         app.dependency_overrides.clear()
         db.close()
