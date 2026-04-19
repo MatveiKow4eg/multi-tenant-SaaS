@@ -16,6 +16,9 @@ from app.services.dns.generator import (
     generate_dkim_keypair,
 )
 
+from app.utils.logger_factory import get_logger
+
+logger = get_logger(__name__)
 
 def normalize_domain(value: str) -> str:
     domain = value.lower().strip()
@@ -106,6 +109,17 @@ def mark_sender_domain_ownership_email_verified(sender_domain: SenderDomain, ema
     recompute_ownership_status(sender_domain)
 
 
+def mark_sender_domain_ownership_email_pending(sender_domain: SenderDomain, email: str) -> None:
+    ensure_ownership_token(sender_domain)
+    now = datetime.now(timezone.utc)
+    sender_domain.ownership_email_status = "pending"
+    sender_domain.ownership_email = email.strip()
+    sender_domain.ownership_email_verified_at = None
+    sender_domain.ownership_last_checked_at = now
+    sender_domain.updated_at = now
+    recompute_ownership_status(sender_domain)
+
+
 def _initialize_sender_domain_profile(db: Session, sender_domain: SenderDomain) -> None:
     ensure_ownership_token(sender_domain)
 
@@ -132,6 +146,11 @@ def _initialize_sender_domain_profile(db: Session, sender_domain: SenderDomain) 
 
 def create_sender_domain_profile(db: Session, tenant_id: int, domain: str) -> SenderDomain:
     domain = normalize_domain(domain)
+    domain_exists = db.query(SenderDomain).filter(SenderDomain.domain == domain).first()
+    if domain_exists:
+        logger.warning("Attempt to register already existing domain: %s", domain)
+        raise ValueError("Domain already registered")
+
     any_domain = (
         db.query(SenderDomain)
         .filter(SenderDomain.tenant_id == tenant_id)
