@@ -42,6 +42,7 @@ from app.services.sender_domains import (
     mark_sender_domain_ownership_email_verified,
     normalize_domain,
     rotate_dkim,
+    sync_sender_domain_profile,
     verify_sender_domain,
     verify_sender_domain_ownership_dns,
 )
@@ -1720,6 +1721,67 @@ def _delete_user_for_tenant_scope(db: Session, tenant_id: int, user_id: int) -> 
     return user_deleted, deleted_memberships
 
 
+def _delete_user_if_orphaned(db: Session, user_id: int) -> bool:
+    membership_count = (
+        db.query(func.count(TenantMembership.id))
+        .filter(TenantMembership.user_id == user_id)
+        .scalar()
+        or 0
+    )
+    if membership_count > 0:
+        return False
+
+    db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    db.query(EmailToken).filter(EmailToken.user_id == user_id).delete(synchronize_session=False)
+    db.query(TenantInvite).filter(TenantInvite.invited_by_user_id == user_id).delete(synchronize_session=False)
+    db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+    return True
+
+
+def _delete_tenant_with_related_objects(db: Session, tenant_id: int) -> dict[str, int]:
+    company_ids = [
+        row[0]
+        for row in db.query(Company.id)
+        .filter(Company.tenant_id == tenant_id)
+        .all()
+    ]
+    deleted_companies = 0
+    if company_ids:
+        deleted_companies = _delete_companies_with_related_objects(db, company_ids)
+
+    # Remove any sender domains that are not tied to company rows.
+    deleted_domains = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).delete(synchronize_session=False)
+
+    user_ids_in_tenant = [
+        row[0]
+        for row in db.query(TenantMembership.user_id)
+        .filter(TenantMembership.tenant_id == tenant_id)
+        .all()
+    ]
+
+    db.query(UserSession).filter(UserSession.tenant_id == tenant_id).delete(synchronize_session=False)
+    db.query(TenantInvite).filter(TenantInvite.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_memberships = db.query(TenantMembership).filter(TenantMembership.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_audit_logs = db.query(AuditLog).filter(AuditLog.tenant_id == tenant_id).delete(synchronize_session=False)
+    deleted_tenants = db.query(Tenant).filter(Tenant.id == tenant_id).delete(synchronize_session=False)
+
+    deleted_users = 0
+    for uid in set(user_ids_in_tenant):
+        if _delete_user_if_orphaned(db, uid):
+            deleted_users += 1
+
+    return {
+        "deleted_companies": deleted_companies,
+        "deleted_domains": deleted_domains,
+        "deleted_memberships": deleted_memberships,
+        "deleted_audit_logs": deleted_audit_logs,
+        "deleted_tenants": deleted_tenants,
+        "deleted_users": deleted_users,
+        "company_count": len(company_ids),
+        "member_count": len(set(user_ids_in_tenant)),
+    }
+
+
 @router.get("/dev-features", response_class=HTMLResponse)
 def dev_features_page(
     request: Request,
@@ -1868,32 +1930,29 @@ def dev_features_delete_user(
         return _flash_redirect("/ui/dev-features", error="Пользователь не найден в указанном tenant")
 
     _, user = member_row
+    user_id_value = user.id
+    user_email_value = user.email
     display_name = (user.full_name or user.email or str(user.id)).strip()
     try:
-        company_ids = [
-            row[0]
-            for row in db.query(Company.id)
-            .filter(Company.tenant_id == effective_tenant_id)
-            .all()
-        ]
-        deleted_companies = 0
-        if company_ids:
-            deleted_companies = _delete_companies_with_related_objects(db, company_ids)
-
-        user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, effective_tenant_id, user.id)
+        tenant_delete_result = _delete_tenant_with_related_objects(db, effective_tenant_id)
+        forced_user_deleted = _delete_user_if_orphaned(db, user_id_value)
         db.add(
             AuditLog(
                 tenant_id=effective_tenant_id,
                 action="dev_feature_user_deleted",
                 entity_type="user",
-                entity_id=user.id,
+                entity_id=user_id_value,
                 details={
-                    "user_id": user.id,
-                    "user_email": user.email,
-                    "deleted_memberships": deleted_memberships,
-                    "user_deleted": user_deleted,
-                    "deleted_companies": deleted_companies,
-                    "company_ids": company_ids,
+                    "user_id": user_id_value,
+                    "user_email": user_email_value,
+                    "tenant_deleted": tenant_delete_result.get("deleted_tenants", 0) > 0,
+                    "deleted_tenants": tenant_delete_result.get("deleted_tenants", 0),
+                    "deleted_companies": tenant_delete_result.get("deleted_companies", 0),
+                    "deleted_domains": tenant_delete_result.get("deleted_domains", 0),
+                    "deleted_memberships": tenant_delete_result.get("deleted_memberships", 0),
+                    "deleted_audit_logs": tenant_delete_result.get("deleted_audit_logs", 0),
+                    "deleted_users": tenant_delete_result.get("deleted_users", 0),
+                    "force_deleted_selected_user": forced_user_deleted,
                 },
                 reason="DELETE_USERS feature action from dev features page",
             )
@@ -1903,9 +1962,15 @@ def dev_features_delete_user(
         db.rollback()
         return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
 
-    if user_deleted:
-        return _flash_redirect("/ui/dev-features", message=f"Пользователь удален: {display_name}. Компаний удалено: {deleted_companies}")
-    return _flash_redirect("/ui/dev-features", message=f"Пользователь удален из tenant: {display_name}. Компаний удалено: {deleted_companies}")
+    return _flash_redirect(
+        "/ui/dev-features",
+        message=(
+            f"Пользователь удален: {display_name}. "
+            f"Tenant удален: {tenant_delete_result.get('deleted_tenants', 0)}. "
+            f"Компаний удалено: {tenant_delete_result.get('deleted_companies', 0)}. "
+            f"Доменов удалено: {tenant_delete_result.get('deleted_domains', 0)}."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3429,12 +3494,23 @@ def onboarding_start_page(
         step2_completed,
     )
 
+    company_name_value = company.name if company else ""
+    company_website_value = f"https://{company.domain}" if company and company.domain else ""
+    company_domain_value = company.domain if company else ""
+    if last_company_audit and isinstance(last_company_audit.details, dict):
+        if not company_name_value:
+            company_name_value = str(last_company_audit.details.get("company_name") or "").strip()
+        if not company_website_value:
+            company_website_value = str(last_company_audit.details.get("website") or "").strip()
+        if not company_domain_value:
+            company_domain_value = str(last_company_audit.details.get("domain") or "").strip()
+
     context = {
         **_base_context(request, "Let's set up your workspace"),
         "workspace_name": tenant.name or "",
-        "company_name": company.name if company else "",
-        "company_website": f"https://{company.domain}" if company and company.domain else "",
-        "company_domain": company.domain if company else "",
+        "company_name": company_name_value,
+        "company_website": company_website_value,
+        "company_domain": company_domain_value,
         "domain_id": sender_domain.id if sender_domain else None,
         "domain_status": sender_domain.status if sender_domain else "pending",
         "domain_ownership_status": sender_domain.ownership_status if sender_domain else "pending",
@@ -3517,70 +3593,27 @@ def onboarding_start_submit(
             logger.error("Onboarding step=1 failed: invalid company_website format tenant_id=%s", tenant_id)
             return {"success": False, "error": "Некорректный формат website"}
 
-        duplicate = db.query(Company).filter(Company.domain == domain, Company.tenant_id != tenant_id).first()
-        if duplicate is not None:
-            logger.error(
-                "Onboarding step=1 failed: domain already used in another workspace tenant_id=%s domain=%s",
-                tenant_id,
-                domain,
-            )
-            return {"success": False, "error": "Этот домен уже используется в другом workspace"}
-
-        company = db.query(Company).filter(Company.domain == domain, Company.tenant_id == tenant_id).first()
-        if company is None:
-            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
-
-        if company is None:
-            company = Company(
-                tenant_id=tenant_id,
-                domain=domain,
-                name=_trim(company_name) or domain.split('.')[0].title(),
-                status=CompanyStatus.new,
-            )
-            db.add(company)
-        else:
-            company.domain = domain
-            company.name = _trim(company_name) or company.name or domain.split('.')[0].title()
-
         # Generate workspace_name if not provided (should be auto-generated on frontend)
         if not workspace_name.strip():
             workspace_name = _trim(company_name) or domain.split('.')[0].title()
 
-        sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).order_by(SenderDomain.id.asc()).first()
-        if sender_domain is not None and sender_domain.domain != domain:
-            logger.error(
-                "Onboarding step=1 failed: sender domain mismatch tenant_id=%s existing_domain=%s requested_domain=%s",
-                tenant_id,
-                sender_domain.domain,
-                domain,
-            )
-            return {
-                "success": False,
-                "error": (
-                    "Для workspace уже настроен другой sender domain. "
-                    "Измените его в DNS Wizard (/ui/domains)."
-                ),
-            }
-
-        if sender_domain is None:
-            try:
-                sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain)
+        try:
+            sender_domain, profile_changed = sync_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain)
+            if profile_changed:
                 logger.info(
-                    "Onboarding step=1: sender domain profile auto-created tenant_id=%s sender_domain_id=%s domain=%s",
+                    "Onboarding step=1: sender domain profile synced tenant_id=%s sender_domain_id=%s domain=%s",
                     tenant_id,
                     sender_domain.id,
                     sender_domain.domain,
                 )
-            except ValueError as exc:
-                logger.error(
-                    "Onboarding step=1 failed: auto-create sender domain error tenant_id=%s domain=%s error=%s",
-                    tenant_id,
-                    domain,
-                    str(exc),
-                )
-                return {"success": False, "error": str(exc)}
-        else:
-            ensure_ownership_token(sender_domain)
+        except ValueError as exc:
+            logger.error(
+                "Onboarding step=1 failed: sender domain sync error tenant_id=%s domain=%s error=%s",
+                tenant_id,
+                domain,
+                str(exc),
+            )
+            return {"success": False, "error": str(exc)}
 
         tenant.name = workspace_name.strip() or tenant.name
 
@@ -3593,13 +3626,19 @@ def onboarding_start_submit(
                 "workspace_name": tenant.name,
                 "website": company_website.strip(),
                 "domain": domain,
+                "company_name": _trim(company_name) or "",
                 "sender_name": _trim(sender_name) or "",
             },
         ))
         db.commit()
         logger.info("Onboarding step=1 completed: company saved tenant_id=%s domain=%s", tenant_id, domain)
 
-        return {"success": True, "next_step": 2, "reload": True}
+        return {
+            "success": True,
+            "next_step": 2,
+            "reload": True,
+            "open_domain_id": sender_domain.id,
+        }
 
     # Step 2: Sender domain management with explicit actions.
     if step == 2:
@@ -3635,19 +3674,31 @@ def onboarding_start_submit(
                 logger.error("Onboarding step=2 add_domain failed: actor inactive user_id=%s", actor.id)
                 return {"success": False, "error": "Your account must be activated before adding a sending domain."}
 
-            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
-            if company is None or not company.domain:
-                logger.error("Onboarding step=2 add_domain failed: company/domain missing tenant_id=%s", tenant_id)
-                return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
-
             if sender_domain is None:
+                last_company_audit = (
+                    db.query(AuditLog)
+                    .filter(
+                        AuditLog.tenant_id == tenant_id,
+                        AuditLog.action == "onboarding_company_saved",
+                        AuditLog.entity_type == "tenant",
+                        AuditLog.entity_id == tenant_id,
+                    )
+                    .order_by(AuditLog.id.desc())
+                    .first()
+                )
+                resolved_domain = ""
+                if last_company_audit and isinstance(last_company_audit.details, dict):
+                    resolved_domain = str(last_company_audit.details.get("domain") or "").strip().lower()
+                if not resolved_domain:
+                    logger.error("Onboarding step=2 add_domain failed: onboarding domain missing tenant_id=%s", tenant_id)
+                    return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
                 try:
-                    sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=company.domain)
+                    sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=resolved_domain)
                 except ValueError as exc:
                     logger.error(
                         "Onboarding step=2 add_domain failed: create profile error tenant_id=%s domain=%s error=%s",
                         tenant_id,
-                        company.domain,
+                        resolved_domain,
                         str(exc),
                     )
                     return {"success": False, "error": str(exc)}

@@ -28,6 +28,7 @@ _UI_PUBLIC_PATH_PREFIXES = (
     "/ui/reset-password",
     "/ui/accept-invite",
     "/ui/verify-email",
+    "/ui/verify-domain-ownership",
 )
 
 _UI_ONBOARDING_ALLOWED_PATH_PREFIXES = (
