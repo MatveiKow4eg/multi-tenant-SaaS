@@ -38,6 +38,7 @@ from app.services.sender_domains import (
     authentication_status,
     create_sender_domain_profile,
     ensure_ownership_token,
+    mark_sender_domain_ownership_email_pending,
     mark_sender_domain_ownership_email_verified,
     normalize_domain,
     rotate_dkim,
@@ -70,9 +71,9 @@ from app.worker.celery_app import celery_app
 from app.core.config import settings
 from app.core.feature_toggles import parse_feature_toggles
 from app.core.feature_toggles import active_feature_toggles, parse_feature_toggles
-import logging
+from app.utils.logger_factory import get_logger
 
-logger = logging.getLogger("app.ui.routes")
+logger = get_logger("app.ui.routes")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -162,6 +163,10 @@ def _extract_email_domain(value: str | None) -> str | None:
     if not match:
         return None
     return (match.group(1) or "").strip().lower()
+
+
+def _domain_ownership_email_token_purpose(domain_id: int) -> str:
+    return f"verify_domain_{domain_id}"
 
 
 def _json_excerpt(payload: dict | None, limit: int = 160) -> str:
@@ -1634,6 +1639,16 @@ def _is_feature_enabled(toggle_name: str) -> bool:
 
 
 def _delete_companies_with_related_objects(db: Session, company_ids: list[int]) -> int:
+    company_domain_rows = (
+        db.query(Company.domain, Company.tenant_id)
+        .filter(
+            Company.id.in_(company_ids),
+            Company.domain.isnot(None),
+            Company.tenant_id.isnot(None),
+        )
+        .all()
+    )
+
     campaign_ids = [
         row[0]
         for row in db.query(Campaign.id)
@@ -1662,6 +1677,16 @@ def _delete_companies_with_related_objects(db: Session, company_ids: list[int]) 
     db.query(Handoff).filter(Handoff.company_id.in_(company_ids)).delete(synchronize_session=False)
     db.query(CompanyPage).filter(CompanyPage.company_id.in_(company_ids)).delete(synchronize_session=False)
     db.query(Contact).filter(Contact.company_id.in_(company_ids)).delete(synchronize_session=False)
+
+    # Remove sender domains linked to deleted companies by tenant/domain.
+    for domain, tenant_id in company_domain_rows:
+        if not domain or tenant_id is None:
+            continue
+        db.query(SenderDomain).filter(
+            SenderDomain.tenant_id == tenant_id,
+            SenderDomain.domain == domain,
+        ).delete(synchronize_session=False)
+
     return db.query(Company).filter(Company.id.in_(company_ids)).delete(synchronize_session=False)
 
 
@@ -3302,11 +3327,19 @@ def onboarding_start_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Single-screen wizard: load all onboarding data."""
+    logger.debug(
+        "Onboarding page requested: tenant_id=%s step=%s domain_id=%s",
+        tenant_id,
+        step,
+        domain_id,
+    )
     if tenant_id is None or tenant_id <= 0:
+        logger.error("Onboarding page failed: invalid tenant_id=%s", tenant_id)
         return _flash_redirect("/ui/login", error="Сессия не найдена")
 
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if tenant is None:
+        logger.error("Onboarding page failed: tenant not found tenant_id=%s", tenant_id)
         return _flash_redirect("/ui/login", error="Workspace не найден")
 
     onboarding_completed = (
@@ -3321,6 +3354,7 @@ def onboarding_start_page(
         is not None
     )
     if onboarding_completed:
+        logger.info("Onboarding page skipped: already completed tenant_id=%s", tenant_id)
         return RedirectResponse(url="/ui", status_code=303)
 
     company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
@@ -3346,6 +3380,11 @@ def onboarding_start_page(
             ownership_changed = True
     if ownership_changed:
         db.commit()
+        logger.info(
+            "Onboarding page: ownership tokens updated tenant_id=%s domains_updated=%s",
+            tenant_id,
+            len(sender_domains),
+        )
     sender_domain = sender_domains[0] if sender_domains else None
 
     last_company_audit = (
@@ -3369,6 +3408,14 @@ def onboarding_start_page(
         and sender_domain.ownership_status == "verified"
         and authentication_status(sender_domain) == "authenticated"
     )
+    logger.debug(
+        "Onboarding page state: tenant_id=%s company_exists=%s sender_domains=%s initial_step=%s step2_completed=%s",
+        tenant_id,
+        company is not None,
+        len(sender_domains),
+        initial_step,
+        step2_completed,
+    )
 
     context = {
         **_base_context(request, "Let's set up your workspace"),
@@ -3390,6 +3437,12 @@ def onboarding_start_page(
         "initial_step": initial_step,
         "initial_domain_id": domain_id,
     }
+    logger.info(
+        "Onboarding page ready: tenant_id=%s initial_step=%s selected_domain_id=%s",
+        tenant_id,
+        initial_step,
+        sender_domain.id if sender_domain else None,
+    )
     return templates.TemplateResponse(request, "onboarding_start.html", context)
 
 
@@ -3409,11 +3462,20 @@ def onboarding_start_submit(
     db: Session = Depends(get_db),
 ) -> RedirectResponse | dict:
     """Handle all onboarding steps (1-3) within single screen."""
+    logger.debug(
+        "Onboarding submit received: tenant_id=%s step=%s action=%s domain_id=%s",
+        tenant_id,
+        step,
+        action,
+        domain_id,
+    )
     if tenant_id is None or tenant_id <= 0:
+        logger.error("Onboarding submit failed: invalid tenant_id=%s", tenant_id)
         return {"success": False, "error": "Сессия не найдена"}
 
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if tenant is None:
+        logger.error("Onboarding submit failed: tenant not found for tenant_id=%s", tenant_id)
         return {"success": False, "error": "Workspace не найден"}
 
     onboarding_completed = (
@@ -3428,19 +3490,28 @@ def onboarding_start_submit(
         is not None
     )
     if onboarding_completed:
+        logger.info("Onboarding submit skipped: onboarding already completed for tenant_id=%s", tenant_id)
         return RedirectResponse(url="/ui", status_code=303)
 
     # Step 1: Company details
     if step == 1:
+        logger.debug("Onboarding step=1 started for tenant_id=%s", tenant_id)
         if not company_website.strip():
+            logger.error("Onboarding step=1 failed: company_website is empty tenant_id=%s", tenant_id)
             return {"success": False, "error": "Укажите website компании"}
 
         domain = _extract_domain_from_website(company_website)
         if domain is None:
+            logger.error("Onboarding step=1 failed: invalid company_website format tenant_id=%s", tenant_id)
             return {"success": False, "error": "Некорректный формат website"}
 
         duplicate = db.query(Company).filter(Company.domain == domain, Company.tenant_id != tenant_id).first()
         if duplicate is not None:
+            logger.error(
+                "Onboarding step=1 failed: domain already used in another workspace tenant_id=%s domain=%s",
+                tenant_id,
+                domain,
+            )
             return {"success": False, "error": "Этот домен уже используется в другом workspace"}
 
         company = db.query(Company).filter(Company.domain == domain, Company.tenant_id == tenant_id).first()
@@ -3465,6 +3536,12 @@ def onboarding_start_submit(
 
         sender_domain = db.query(SenderDomain).filter(SenderDomain.tenant_id == tenant_id).order_by(SenderDomain.id.asc()).first()
         if sender_domain is not None and sender_domain.domain != domain:
+            logger.error(
+                "Onboarding step=1 failed: sender domain mismatch tenant_id=%s existing_domain=%s requested_domain=%s",
+                tenant_id,
+                sender_domain.domain,
+                domain,
+            )
             return {
                 "success": False,
                 "error": (
@@ -3472,6 +3549,26 @@ def onboarding_start_submit(
                     "Измените его в DNS Wizard (/ui/domains)."
                 ),
             }
+
+        if sender_domain is None:
+            try:
+                sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=domain)
+                logger.info(
+                    "Onboarding step=1: sender domain profile auto-created tenant_id=%s sender_domain_id=%s domain=%s",
+                    tenant_id,
+                    sender_domain.id,
+                    sender_domain.domain,
+                )
+            except ValueError as exc:
+                logger.error(
+                    "Onboarding step=1 failed: auto-create sender domain error tenant_id=%s domain=%s error=%s",
+                    tenant_id,
+                    domain,
+                    str(exc),
+                )
+                return {"success": False, "error": str(exc)}
+        else:
+            ensure_ownership_token(sender_domain)
 
         tenant.name = workspace_name.strip() or tenant.name
 
@@ -3488,11 +3585,13 @@ def onboarding_start_submit(
             },
         ))
         db.commit()
+        logger.info("Onboarding step=1 completed: company saved tenant_id=%s domain=%s", tenant_id, domain)
 
         return {"success": True, "next_step": 2, "reload": True}
 
     # Step 2: Sender domain management with explicit actions.
     if step == 2:
+        logger.debug("Onboarding step=2 started: tenant_id=%s action=%s domain_id=%s", tenant_id, action, domain_id)
         from sqlalchemy.orm import joinedload as _jl
         sender_domain = None
         if domain_id is not None:
@@ -3512,22 +3611,33 @@ def onboarding_start_submit(
             )
 
         if action == "add_domain":
+            logger.debug("Onboarding step=2 action=add_domain tenant_id=%s", tenant_id)
             actor = _resolve_request_user(request=request, db=db, tenant_id=tenant_id)
             if actor is None:
+                logger.error("Onboarding step=2 add_domain failed: actor not resolved tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Please sign in again before adding a sending domain."}
             if not actor.email_verified:
+                logger.error("Onboarding step=2 add_domain failed: actor email not verified user_id=%s", actor.id)
                 return {"success": False, "error": "Please verify your email before adding a sending domain."}
             if not actor.is_active:
+                logger.error("Onboarding step=2 add_domain failed: actor inactive user_id=%s", actor.id)
                 return {"success": False, "error": "Your account must be activated before adding a sending domain."}
 
             company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
             if company is None or not company.domain:
+                logger.error("Onboarding step=2 add_domain failed: company/domain missing tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
 
             if sender_domain is None:
                 try:
                     sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=company.domain)
                 except ValueError as exc:
+                    logger.error(
+                        "Onboarding step=2 add_domain failed: create profile error tenant_id=%s domain=%s error=%s",
+                        tenant_id,
+                        company.domain,
+                        str(exc),
+                    )
                     return {"success": False, "error": str(exc)}
                 db.add(AuditLog(
                     tenant_id=tenant_id,
@@ -3537,9 +3647,20 @@ def onboarding_start_submit(
                     details={"domain": sender_domain.domain},
                 ))
                 db.commit()
+                logger.info(
+                    "Onboarding step=2 add_domain completed: profile created tenant_id=%s sender_domain_id=%s domain=%s",
+                    tenant_id,
+                    sender_domain.id,
+                    sender_domain.domain,
+                )
             else:
                 ensure_ownership_token(sender_domain)
                 db.commit()
+                logger.info(
+                    "Onboarding step=2 add_domain completed: existing domain token ensured tenant_id=%s sender_domain_id=%s",
+                    tenant_id,
+                    sender_domain.id,
+                )
             return {
                 "success": True,
                 "next_step": 2,
@@ -3548,37 +3669,67 @@ def onboarding_start_submit(
             }
 
         if action == "verify_ownership_email":
+            logger.debug("Onboarding step=2 action=verify_ownership_email tenant_id=%s", tenant_id)
             if sender_domain is None:
+                logger.error("Onboarding step=2 verify_ownership_email failed: sender_domain missing tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Add a sender domain first."}
+
+            actor = _resolve_request_user(request=request, db=db, tenant_id=tenant_id)
+            if actor is None:
+                logger.error("Onboarding step=2 verify_ownership_email failed: actor not resolved tenant_id=%s", tenant_id)
+                return {"success": False, "error": "Please sign in again before requesting email verification."}
 
             submitted_email = ownership_email.strip()
             email_domain = _extract_email_domain(submitted_email)
             if email_domain is None:
+                logger.error("Onboarding step=2 verify_ownership_email failed: invalid email tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Please enter a valid email address."}
 
             expected_domain = (sender_domain.domain or "").strip().lower()
             if email_domain != expected_domain:
+                logger.error(
+                    "Onboarding step=2 verify_ownership_email failed: email domain mismatch tenant_id=%s expected=%s actual=%s",
+                    tenant_id,
+                    expected_domain,
+                    email_domain,
+                )
                 return {
                     "success": False,
                     "error": f"This email must belong to the domain being verified: {sender_domain.domain}",
                 }
+
+            token_purpose = _domain_ownership_email_token_purpose(sender_domain.id)
+            raw_token = create_email_token(db, user_id=actor.id, purpose=token_purpose)
+            verify_query = urlencode({
+                "token": raw_token,
+                "domain_id": sender_domain.id,
+                "email": submitted_email,
+            })
+            verify_url = f"{settings.app_public_base_url}/ui/verify-domain-ownership?{verify_query}"
 
             try:
                 message_id = send_domain_ownership_verification_email(
                     to_email=submitted_email,
                     domain=sender_domain.domain,
                     workspace_name=tenant.name or "workspace",
+                    verification_url=verify_url,
                 )
             except Exception:
+                logger.error(
+                    "Onboarding step=2 verify_ownership_email failed: mail send error tenant_id=%s sender_domain_id=%s",
+                    tenant_id,
+                    sender_domain.id,
+                    exc_info=True,
+                )
                 return {
                     "success": False,
                     "error": "Failed to send verification email. Please check mail settings and try again.",
                 }
 
-            mark_sender_domain_ownership_email_verified(sender_domain, submitted_email)
+            mark_sender_domain_ownership_email_pending(sender_domain, submitted_email)
             db.add(AuditLog(
                 tenant_id=tenant_id,
-                action="onboarding_domain_ownership_email_verified",
+                action="onboarding_domain_ownership_email_requested",
                 entity_type="sender_domain",
                 entity_id=sender_domain.id,
                 details={
@@ -3587,9 +3738,16 @@ def onboarding_start_submit(
                     "ownership_verified_via": sender_domain.ownership_verified_via,
                     "ownership_email": sender_domain.ownership_email,
                     "message_id": message_id,
+                    "verify_url": verify_url,
                 },
             ))
             db.commit()
+            logger.info(
+                "Onboarding step=2 verify_ownership_email completed: verification link sent tenant_id=%s sender_domain_id=%s ownership_email=%s",
+                tenant_id,
+                sender_domain.id,
+                sender_domain.ownership_email,
+            )
             return {
                 "success": True,
                 "next_step": 2,
@@ -3598,7 +3756,9 @@ def onboarding_start_submit(
             }
 
         if action == "verify_ownership_dns":
+            logger.debug("Onboarding step=2 action=verify_ownership_dns tenant_id=%s", tenant_id)
             if sender_domain is None:
+                logger.error("Onboarding step=2 verify_ownership_dns failed: sender_domain missing tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Add a sender domain first."}
 
             ensure_ownership_token(sender_domain)
@@ -3618,13 +3778,29 @@ def onboarding_start_submit(
                 },
             ))
             db.commit()
+            logger.info(
+                "Onboarding step=2 verify_ownership_dns result: tenant_id=%s sender_domain_id=%s result=%s",
+                tenant_id,
+                sender_domain.id,
+                ownership_result.status,
+            )
 
             if ownership_result.status != "verified":
                 if ownership_result.status == "missing":
+                    logger.error(
+                        "Onboarding step=2 verify_ownership_dns failed: ownership TXT missing tenant_id=%s sender_domain_id=%s",
+                        tenant_id,
+                        sender_domain.id,
+                    )
                     return {
                         "success": False,
                         "error": "Ownership TXT record is not found yet. Please add the record and wait for DNS propagation.",
                     }
+                logger.error(
+                    "Onboarding step=2 verify_ownership_dns failed: ownership TXT mismatch tenant_id=%s sender_domain_id=%s",
+                    tenant_id,
+                    sender_domain.id,
+                )
                 return {
                     "success": False,
                     "error": "Ownership TXT record exists but does not match the expected verification token.",
@@ -3638,7 +3814,9 @@ def onboarding_start_submit(
             }
 
         if action == "check_dns":
+            logger.debug("Onboarding step=2 action=check_dns tenant_id=%s", tenant_id)
             if sender_domain is None:
+                logger.error("Onboarding step=2 check_dns failed: sender_domain missing tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Add a sender domain first."}
 
             verify_sender_domain(sender_domain)
@@ -3657,6 +3835,12 @@ def onboarding_start_submit(
                 },
             ))
             db.commit()
+            logger.info(
+                "Onboarding step=2 check_dns completed: tenant_id=%s sender_domain_id=%s authentication=%s",
+                tenant_id,
+                sender_domain.id,
+                authentication_status(sender_domain),
+            )
             return {
                 "success": True,
                 "next_step": 2,
@@ -3665,13 +3849,22 @@ def onboarding_start_submit(
             }
 
         if action == "next":
+            logger.debug("Onboarding step=2 action=next tenant_id=%s", tenant_id)
             if sender_domain is None:
+                logger.error("Onboarding step=2 next failed: sender_domain missing tenant_id=%s", tenant_id)
                 return {"success": False, "error": "Add and verify a sender domain before continuing."}
             step2_completed = (
                 sender_domain.ownership_status == "verified"
                 and authentication_status(sender_domain) == "authenticated"
             )
             if not step2_completed:
+                logger.error(
+                    "Onboarding step=2 next failed: step2 not completed tenant_id=%s sender_domain_id=%s ownership=%s auth=%s",
+                    tenant_id,
+                    sender_domain.id,
+                    sender_domain.ownership_status,
+                    authentication_status(sender_domain),
+                )
                 return {
                     "success": False,
                     "error": "Domain setup is not complete yet. Verify ownership and run authentication DNS checks.",
@@ -3704,12 +3897,19 @@ def onboarding_start_submit(
                 },
             ))
             db.commit()
+            logger.info(
+                "Onboarding step=2 completed: sender configured tenant_id=%s sender_email=%s",
+                tenant_id,
+                sender_email_clean,
+            )
             return {"success": True, "next_step": 3}
 
+        logger.error("Onboarding step=2 failed: unknown action tenant_id=%s action=%s", tenant_id, action)
         return {"success": False, "error": "Unknown step 2 action."}
 
     # Step 3: Complete onboarding
     if step == 3:
+        logger.debug("Onboarding step=3 started: tenant_id=%s action=%s", tenant_id, action)
         if action == "finish":
             db.add(AuditLog(
                 tenant_id=tenant_id,
@@ -3720,9 +3920,12 @@ def onboarding_start_submit(
                 reason="User completed onboarding wizard.",
             ))
             db.commit()
+            logger.info("Onboarding step=3 completed: onboarding finished tenant_id=%s", tenant_id)
             return RedirectResponse(url="/ui", status_code=303)
+        logger.debug("Onboarding step=3 no-op action tenant_id=%s action=%s", tenant_id, action)
         return {"success": True}
 
+    logger.error("Onboarding submit failed: invalid step tenant_id=%s step=%s", tenant_id, step)
     return {"success": False, "error": "Invalid step"}
 
 
@@ -3746,6 +3949,69 @@ def verify_email_page(
         user.email_verified = True
         db.commit()
     return _flash_redirect("/ui", message="Email подтверждён! Вы можете войти.")
+
+
+@router.get("/verify-domain-ownership")
+def verify_domain_ownership_page(
+    request: Request,
+    token: str | None = None,
+    domain_id: int | None = None,
+    email: str | None = None,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if not token or domain_id is None:
+        return _flash_redirect("/ui/onboarding/start?step=2", error="Verification link is invalid.")
+
+    row = consume_email_token(db, token, _domain_ownership_email_token_purpose(domain_id))
+    if row is None:
+        return _flash_redirect(
+            f"/ui/onboarding/start?step=2&domain_id={domain_id}",
+            error="Verification link is invalid or expired.",
+        )
+
+    sender_domain = db.query(SenderDomain).filter(SenderDomain.id == domain_id).first()
+    if sender_domain is None:
+        return _flash_redirect("/ui/onboarding/start?step=2", error="Sender domain not found.")
+
+    membership = (
+        db.query(TenantMembership)
+        .filter(
+            TenantMembership.user_id == row.user_id,
+            TenantMembership.tenant_id == sender_domain.tenant_id,
+        )
+        .first()
+    )
+    if membership is None:
+        return _flash_redirect("/ui/login", error="Verification link is invalid for this workspace.")
+
+    effective_email = (sender_domain.ownership_email or "").strip()
+    if not effective_email:
+        effective_email = (email or "").strip()
+    if not effective_email:
+        return _flash_redirect(
+            f"/ui/onboarding/start?step=2&domain_id={sender_domain.id}",
+            error="Verification email is missing.",
+        )
+
+    mark_sender_domain_ownership_email_verified(sender_domain, effective_email)
+    db.add(AuditLog(
+        tenant_id=sender_domain.tenant_id,
+        action="onboarding_domain_ownership_email_verified",
+        entity_type="sender_domain",
+        entity_id=sender_domain.id,
+        details={
+            "domain": sender_domain.domain,
+            "ownership_status": sender_domain.ownership_status,
+            "ownership_verified_via": sender_domain.ownership_verified_via,
+            "ownership_email": sender_domain.ownership_email,
+            "verified_by_user_id": row.user_id,
+        },
+    ))
+    db.commit()
+    return _flash_redirect(
+        f"/ui/onboarding/start?step=2&domain_id={sender_domain.id}",
+        message="Domain ownership verified by email.",
+    )
 
 
 # ---------------------------------------------------------------------------
