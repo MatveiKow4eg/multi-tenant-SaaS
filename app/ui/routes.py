@@ -3493,12 +3493,23 @@ def onboarding_start_page(
         step2_completed,
     )
 
+    company_name_value = company.name if company else ""
+    company_website_value = f"https://{company.domain}" if company and company.domain else ""
+    company_domain_value = company.domain if company else ""
+    if last_company_audit and isinstance(last_company_audit.details, dict):
+        if not company_name_value:
+            company_name_value = str(last_company_audit.details.get("company_name") or "").strip()
+        if not company_website_value:
+            company_website_value = str(last_company_audit.details.get("website") or "").strip()
+        if not company_domain_value:
+            company_domain_value = str(last_company_audit.details.get("domain") or "").strip()
+
     context = {
         **_base_context(request, "Let's set up your workspace"),
         "workspace_name": tenant.name or "",
-        "company_name": company.name if company else "",
-        "company_website": f"https://{company.domain}" if company and company.domain else "",
-        "company_domain": company.domain if company else "",
+        "company_name": company_name_value,
+        "company_website": company_website_value,
+        "company_domain": company_domain_value,
         "domain_id": sender_domain.id if sender_domain else None,
         "domain_status": sender_domain.status if sender_domain else "pending",
         "domain_ownership_status": sender_domain.ownership_status if sender_domain else "pending",
@@ -3581,31 +3592,6 @@ def onboarding_start_submit(
             logger.error("Onboarding step=1 failed: invalid company_website format tenant_id=%s", tenant_id)
             return {"success": False, "error": "Некорректный формат website"}
 
-        duplicate = db.query(Company).filter(Company.domain == domain, Company.tenant_id != tenant_id).first()
-        if duplicate is not None:
-            logger.error(
-                "Onboarding step=1 failed: domain already used in another workspace tenant_id=%s domain=%s",
-                tenant_id,
-                domain,
-            )
-            return {"success": False, "error": "Этот домен уже используется в другом workspace"}
-
-        company = db.query(Company).filter(Company.domain == domain, Company.tenant_id == tenant_id).first()
-        if company is None:
-            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
-
-        if company is None:
-            company = Company(
-                tenant_id=tenant_id,
-                domain=domain,
-                name=_trim(company_name) or domain.split('.')[0].title(),
-                status=CompanyStatus.new,
-            )
-            db.add(company)
-        else:
-            company.domain = domain
-            company.name = _trim(company_name) or company.name or domain.split('.')[0].title()
-
         # Generate workspace_name if not provided (should be auto-generated on frontend)
         if not workspace_name.strip():
             workspace_name = _trim(company_name) or domain.split('.')[0].title()
@@ -3657,6 +3643,7 @@ def onboarding_start_submit(
                 "workspace_name": tenant.name,
                 "website": company_website.strip(),
                 "domain": domain,
+                "company_name": _trim(company_name) or "",
                 "sender_name": _trim(sender_name) or "",
             },
         ))
@@ -3699,19 +3686,31 @@ def onboarding_start_submit(
                 logger.error("Onboarding step=2 add_domain failed: actor inactive user_id=%s", actor.id)
                 return {"success": False, "error": "Your account must be activated before adding a sending domain."}
 
-            company = db.query(Company).filter(Company.tenant_id == tenant_id).order_by(Company.id.asc()).first()
-            if company is None or not company.domain:
-                logger.error("Onboarding step=2 add_domain failed: company/domain missing tenant_id=%s", tenant_id)
-                return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
-
             if sender_domain is None:
+                last_company_audit = (
+                    db.query(AuditLog)
+                    .filter(
+                        AuditLog.tenant_id == tenant_id,
+                        AuditLog.action == "onboarding_company_saved",
+                        AuditLog.entity_type == "tenant",
+                        AuditLog.entity_id == tenant_id,
+                    )
+                    .order_by(AuditLog.id.desc())
+                    .first()
+                )
+                resolved_domain = ""
+                if last_company_audit and isinstance(last_company_audit.details, dict):
+                    resolved_domain = str(last_company_audit.details.get("domain") or "").strip().lower()
+                if not resolved_domain:
+                    logger.error("Onboarding step=2 add_domain failed: onboarding domain missing tenant_id=%s", tenant_id)
+                    return {"success": False, "error": "Add your company website on step 1 before adding a sender domain."}
                 try:
-                    sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=company.domain)
+                    sender_domain = create_sender_domain_profile(db=db, tenant_id=tenant_id, domain=resolved_domain)
                 except ValueError as exc:
                     logger.error(
                         "Onboarding step=2 add_domain failed: create profile error tenant_id=%s domain=%s error=%s",
                         tenant_id,
-                        company.domain,
+                        resolved_domain,
                         str(exc),
                     )
                     return {"success": False, "error": str(exc)}
