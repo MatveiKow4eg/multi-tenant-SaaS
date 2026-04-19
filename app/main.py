@@ -76,6 +76,7 @@ async def ui_csrf_middleware(request, call_next):
 
         active_session = None
         if raw_token:
+            header_token = _extract_bearer_token(request.headers.get("Authorization"))
             override = request.app.dependency_overrides.get(get_db)
             override_gen = None
             db = None
@@ -93,13 +94,14 @@ async def ui_csrf_middleware(request, call_next):
                     from app.models.company import Company
                     from app.models.sender_domain import SenderDomain
 
-                    header_tenant_id_raw = request.headers.get("X-Tenant-Id")
                     effective_tenant_id = active_session.tenant_id
-                    if header_tenant_id_raw:
-                        try:
-                            effective_tenant_id = int(header_tenant_id_raw)
-                        except ValueError:
-                            pass
+                    if header_token is not None:
+                        header_tenant_id_raw = request.headers.get("X-Tenant-Id")
+                        if header_tenant_id_raw:
+                            try:
+                                effective_tenant_id = int(header_tenant_id_raw)
+                            except ValueError:
+                                pass
 
                     has_verified_domain = (
                         db.query(SenderDomain.id)
@@ -110,13 +112,30 @@ async def ui_csrf_middleware(request, call_next):
                         .first()
                         is not None
                     )
+                    from app.models.audit_log import AuditLog
+
+                    onboarding_completed = (
+                        db.query(AuditLog.id)
+                        .filter(
+                            AuditLog.tenant_id == effective_tenant_id,
+                            AuditLog.action == "onboarding_completed",
+                            AuditLog.entity_type == "tenant",
+                            AuditLog.entity_id == effective_tenant_id,
+                        )
+                        .first()
+                        is not None
+                    )
                     has_any_company = (
                         db.query(Company.id)
                         .filter(Company.tenant_id == effective_tenant_id)
                         .first()
                         is not None
                     )
-                    onboarding_required = (not has_verified_domain) and (not has_any_company)
+                    onboarding_required = (
+                        (not onboarding_completed)
+                        and (not has_verified_domain)
+                        and (not has_any_company)
+                    )
             finally:
                 if override_gen is not None:
                     try:

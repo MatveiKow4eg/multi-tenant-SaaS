@@ -31,6 +31,8 @@ from app.models.tenant import Tenant
 from app.models.tenant_membership import MembershipRole, TenantMembership
 from app.models.tenant_invite import TenantInvite
 from app.models.user import User
+from app.models.user_session import UserSession
+from app.models.email_token import EmailToken
 from app.models.sender_domain import ManagedDkimSelector, SenderDomain
 from app.services.sender_domains import (
     authentication_status,
@@ -68,6 +70,9 @@ from app.worker.celery_app import celery_app
 from app.core.config import settings
 from app.core.feature_toggles import parse_feature_toggles
 from app.core.feature_toggles import active_feature_toggles, parse_feature_toggles
+import logging
+
+logger = logging.getLogger("app.ui.routes")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -627,6 +632,13 @@ def _company_query(db: Session, tenant_id: int | None):
 
 def _company_by_id(db: Session, company_id: int, tenant_id: int | None) -> Company | None:
     return _company_query(db, tenant_id).filter(Company.id == company_id).first()
+
+
+def _tenant_user_rows_query(db: Session, tenant_id: int | None) -> list[User]:
+    q = db.query(TenantMembership, User).join(User, User.id == TenantMembership.user_id)
+    if tenant_id is not None:
+        q = q.filter(TenantMembership.tenant_id == tenant_id)
+    return q
 
 
 def _campaign_query(db: Session, tenant_id: int | None):
@@ -1644,22 +1656,64 @@ def _delete_companies_with_related_objects(db: Session, company_ids: list[int]) 
     return db.query(Company).filter(Company.id.in_(company_ids)).delete(synchronize_session=False)
 
 
+def _delete_user_for_tenant_scope(db: Session, tenant_id: int, user_id: int) -> tuple[bool, int]:
+    membership_count = (
+        db.query(func.count(TenantMembership.id))
+        .filter(TenantMembership.user_id == user_id)
+        .scalar()
+        or 0
+    )
+
+    db.query(UserSession).filter(
+        UserSession.user_id == user_id,
+        UserSession.tenant_id == tenant_id,
+    ).delete(synchronize_session=False)
+
+    deleted_memberships = db.query(TenantMembership).filter(
+        TenantMembership.user_id == user_id,
+        TenantMembership.tenant_id == tenant_id,
+    ).delete(synchronize_session=False)
+
+    user_deleted = False
+    if membership_count <= deleted_memberships:
+        db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+        db.query(EmailToken).filter(EmailToken.user_id == user_id).delete(synchronize_session=False)
+        db.query(TenantInvite).filter(TenantInvite.invited_by_user_id == user_id).delete(synchronize_session=False)
+        db.query(TenantMembership).filter(TenantMembership.user_id == user_id).delete(synchronize_session=False)
+        db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+        user_deleted = True
+
+    return user_deleted, deleted_memberships
+
+
 @router.get("/dev-features", response_class=HTMLResponse)
 def dev_features_page(
     request: Request,
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    delete_company_enabled = _is_feature_enabled("DELETE_COMPANY")
     delete_users_enabled = _is_feature_enabled("DELETE_USERS")
     companies_query = _company_query(db, tenant_id).order_by(Company.created_at.desc(), Company.id.desc())
     companies = companies_query.limit(200).all()
+    user_rows_query = _tenant_user_rows_query(db, tenant_id).order_by(
+        TenantMembership.created_at.desc(),
+        TenantMembership.id.desc(),
+    )
+    user_rows = user_rows_query.limit(200).all()
     context = {
         **_base_context(request, "Dev Features"),
+        "delete_company_enabled": delete_company_enabled,
         "delete_users_enabled": delete_users_enabled,
         "delete_company_path": "/ui/dev-features/delete-company",
+        "delete_user_path": "/ui/dev-features/delete-user",
         "companies": companies,
         "company_count": companies_query.count(),
+        "users": user_rows,
+        "user_count": user_rows_query.count(),
     }
+
+    logger.info(f"Rendering dev features page with {len(companies)} companies and {len(user_rows)} users for tenant_id={tenant_id}")
     return templates.TemplateResponse(request, "dev_features.html", context)
 
 
@@ -1672,8 +1726,8 @@ def dev_features_delete_company_by_name(
 ) -> RedirectResponse:
     if tenant_id is None:
         return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
-    if not _is_feature_enabled("DELETE_USERS"):
-        return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
+    if not _is_feature_enabled("DELETE_COMPANY"):
+        return _flash_redirect("/ui/dev-features", error="DELETE_COMPANY feature disabled")
 
     clean_name = _trim(company_name)
     if not clean_name:
@@ -1702,7 +1756,7 @@ def dev_features_delete_company_by_name(
                     "deleted_companies": deleted_companies,
                     "company_ids": company_ids,
                 },
-                reason="DELETE_USERS feature action from dev features page",
+                reason="DELETE_COMPANY feature action from dev features page",
             )
         )
         db.commit()
@@ -1722,8 +1776,8 @@ def dev_features_delete_company(
 ) -> RedirectResponse:
     if tenant_id is None:
         return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
-    if not _is_feature_enabled("DELETE_USERS"):
-        return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
+    if not _is_feature_enabled("DELETE_COMPANY"):
+        return _flash_redirect("/ui/dev-features", error="DELETE_COMPANY feature disabled")
 
     company = _company_by_id(db, company_id, tenant_id)
     if not company:
@@ -1743,7 +1797,7 @@ def dev_features_delete_company(
                     "company_name": company_name,
                     "deleted_companies": deleted_companies,
                 },
-                reason="DELETE_USERS feature action from dev features page",
+                reason="DELETE_COMPANY feature action from dev features page",
             )
         )
         db.commit()
@@ -1752,6 +1806,59 @@ def dev_features_delete_company(
         return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
 
     return _flash_redirect("/ui/dev-features", message=f"Компания удалена: {company_name}")
+
+
+@router.post("/dev-features/delete-user")
+def dev_features_delete_user(
+    request: Request,
+    user_id: int = Form(...),
+    tenant_id: int | None = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if tenant_id is None:
+        return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
+    if not _is_feature_enabled("DELETE_USERS"):
+        return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
+
+    member_row = (
+        _tenant_user_rows_query(db, tenant_id)
+        .filter(User.id == user_id)
+        .first()
+    )
+    if not member_row:
+        return _flash_redirect("/ui/dev-features", error="Пользователь не найден в текущем tenant")
+
+    _, user = member_row
+    actor = _resolve_request_user(request, db, tenant_id)
+    if actor and actor.id == user.id:
+        return _flash_redirect("/ui/dev-features", error="Нельзя удалить текущего пользователя")
+
+    display_name = (user.full_name or user.email or str(user.id)).strip()
+    try:
+        user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, tenant_id, user.id)
+        db.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                action="dev_feature_user_deleted",
+                entity_type="user",
+                entity_id=user.id,
+                details={
+                    "user_id": user.id,
+                    "user_email": user.email,
+                    "deleted_memberships": deleted_memberships,
+                    "user_deleted": user_deleted,
+                },
+                reason="DELETE_USERS feature action from dev features page",
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return _flash_redirect("/ui/dev-features", error=f"Ошибка удаления: {exc}")
+
+    if user_deleted:
+        return _flash_redirect("/ui/dev-features", message=f"Пользователь удален: {display_name}")
+    return _flash_redirect("/ui/dev-features", message=f"Пользователь удален из tenant: {display_name}")
 
 
 # ---------------------------------------------------------------------------
