@@ -641,6 +641,15 @@ def _tenant_user_rows_query(db: Session, tenant_id: int | None) -> list[User]:
     return q
 
 
+def _all_tenant_user_rows_query(db: Session):
+    """Returns (TenantMembership, User, Tenant) across every tenant."""
+    return (
+        db.query(TenantMembership, User, Tenant)
+        .join(User, User.id == TenantMembership.user_id)
+        .join(Tenant, Tenant.id == TenantMembership.tenant_id)
+    )
+
+
 def _campaign_query(db: Session, tenant_id: int | None):
     q = db.query(Campaign)
     if tenant_id is not None:
@@ -1696,11 +1705,12 @@ def dev_features_page(
     delete_users_enabled = _is_feature_enabled("DELETE_USERS")
     companies_query = _company_query(db, tenant_id).order_by(Company.created_at.desc(), Company.id.desc())
     companies = companies_query.limit(200).all()
-    user_rows_query = _tenant_user_rows_query(db, tenant_id).order_by(
+    all_users_query = _all_tenant_user_rows_query(db).order_by(
+        TenantMembership.tenant_id.asc(),
         TenantMembership.created_at.desc(),
         TenantMembership.id.desc(),
     )
-    user_rows = user_rows_query.limit(200).all()
+    user_rows = all_users_query.limit(500).all()
     context = {
         **_base_context(request, "Dev Features"),
         "delete_company_enabled": delete_company_enabled,
@@ -1710,10 +1720,10 @@ def dev_features_page(
         "companies": companies,
         "company_count": companies_query.count(),
         "users": user_rows,
-        "user_count": user_rows_query.count(),
+        "user_count": all_users_query.count(),
     }
 
-    logger.info(f"Rendering dev features page with {len(companies)} companies and {len(user_rows)} users for tenant_id={tenant_id}")
+    logger.info(f"Rendering dev features page with {len(companies)} companies and {len(user_rows)} users across all tenants")
     return templates.TemplateResponse(request, "dev_features.html", context)
 
 
@@ -1812,33 +1822,33 @@ def dev_features_delete_company(
 def dev_features_delete_user(
     request: Request,
     user_id: int = Form(...),
+    membership_tenant_id: int | None = Form(default=None),
     tenant_id: int | None = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    if tenant_id is None:
-        return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
     if not _is_feature_enabled("DELETE_USERS"):
         return _flash_redirect("/ui/dev-features", error="DELETE_USERS feature disabled")
 
+    # Use explicit membership_tenant_id from form when provided (cross-tenant deletion).
+    effective_tenant_id = membership_tenant_id if membership_tenant_id is not None else tenant_id
+    if effective_tenant_id is None:
+        return _flash_redirect("/ui/dev-features", error="Нет активного тенанта")
+
     member_row = (
-        _tenant_user_rows_query(db, tenant_id)
+        _tenant_user_rows_query(db, effective_tenant_id)
         .filter(User.id == user_id)
         .first()
     )
     if not member_row:
-        return _flash_redirect("/ui/dev-features", error="Пользователь не найден в текущем tenant")
+        return _flash_redirect("/ui/dev-features", error="Пользователь не найден в указанном tenant")
 
     _, user = member_row
-    actor = _resolve_request_user(request, db, tenant_id)
-    if actor and actor.id == user.id:
-        return _flash_redirect("/ui/dev-features", error="Нельзя удалить текущего пользователя")
-
     display_name = (user.full_name or user.email or str(user.id)).strip()
     try:
-        user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, tenant_id, user.id)
+        user_deleted, deleted_memberships = _delete_user_for_tenant_scope(db, effective_tenant_id, user.id)
         db.add(
             AuditLog(
-                tenant_id=tenant_id,
+                tenant_id=effective_tenant_id,
                 action="dev_feature_user_deleted",
                 entity_type="user",
                 entity_id=user.id,
