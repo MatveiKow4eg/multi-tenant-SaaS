@@ -46,7 +46,7 @@ You can keep defaults for PostgreSQL and Redis for local start.
 Set all toggles in one env variable using a JSON object where key is toggle name and value is true/false:
 
 ```env
-FEATURE_TOGGLES={"DELETE_USERS":true,"AUTH_STRICT_MODE":false}
+FEATURE_TOGGLES={"DELETE_COMPANY":true,"DELETE_USERS":true,"AUTH_STRICT_MODE":false}
 ```
 
 Only toggles with value `true` are shown on the UI page:

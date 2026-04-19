@@ -6,16 +6,16 @@
 </section>
 
 <section class="card">
-    <h3>DELETE_USERS</h3>
+    <h3>DELETE_COMPANY</h3>
     <table class="compact-table">
         <tbody>
             <tr>
                 <th>Enabled</th>
-                <td><strong>{{ "true" if delete_users_enabled else "false" }}</strong></td>
+                <td><strong>{{ "true" if delete_company_enabled else "false" }}</strong></td>
             </tr>
             <tr>
                 <th>Action path</th>
-                <td>{{ delete_company_path if delete_users_enabled else "(hidden while feature is disabled)" }}</td>
+                <td>{{ delete_company_path if delete_company_enabled else "(hidden while feature is disabled)" }}</td>
             </tr>
             <tr>
                 <th>Companies in scope</th>
@@ -24,7 +24,7 @@
         </tbody>
     </table>
 
-    {% if delete_users_enabled %}
+    {% if delete_company_enabled %}
     <div class="top-gap">
         {% if companies %}
         <table class="compact-table">
@@ -49,6 +49,58 @@
         <p class="muted small">Deletes the selected company and cascades removal of related objects in the current tenant scope.</p>
         {% else %}
         <p class="muted">No companies found in current tenant scope.</p>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Enable DELETE_COMPANY=true in FEATURE_TOGGLES to render the delete action path.</p>
+    {% endif %}
+</section>
+
+<section class="card">
+    <h3>DELETE_USERS</h3>
+    <table class="compact-table">
+        <tbody>
+            <tr>
+                <th>Enabled</th>
+                <td><strong>{{ "true" if delete_users_enabled else "false" }}</strong></td>
+            </tr>
+            <tr>
+                <th>Action path</th>
+                <td>{{ delete_user_path if delete_users_enabled else "(hidden while feature is disabled)" }}</td>
+            </tr>
+            <tr>
+                <th>Users in scope</th>
+                <td>{{ user_count }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    {% if delete_users_enabled %}
+    <div class="top-gap">
+        {% if users %}
+        <table class="compact-table">
+            <thead><tr><th>User ID</th><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>
+                {% for membership, user in users %}
+                <tr>
+                    <td>{{ user.id }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ user.full_name or "-" }}</td>
+                    <td>{{ membership.role.value if membership.role else "-" }}</td>
+                    <td>{{ membership.status }}</td>
+                    <td>
+                        <form method="post" action="{{ delete_user_path }}" class="inline-form">
+                            <input type="hidden" name="user_id" value="{{ user.id }}" />
+                            <button type="submit">Delete user</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted small">Deletes the user in current tenant scope. If this is the user&apos;s last tenant membership, account-linked auth data is also removed.</p>
+        {% else %}
+        <p class="muted">No users found in current tenant scope.</p>
         {% endif %}
     </div>
     {% else %}
